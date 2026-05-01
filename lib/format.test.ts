@@ -24,8 +24,10 @@ describe("formatEur", () => {
     expect(formatEur(100)).toBe(`1,00${NBSP}€`);
   });
 
-  it("123456 cents -> '1.234,56 €'", () => {
-    expect(formatEur(123456)).toBe(`1.234,56${NBSP}€`);
+  it("123456 cents -> '1234,56 €' (Intl.NumberFormat does not add grouping separator below 10000)", () => {
+    // Node 20 ICU/CLDR 'es-ES': thousands separator only applies when integer part >= 5 digits.
+    // 1234.56 EUR (4-digit integer) has no dot separator. Plan example was idealized.
+    expect(formatEur(123456)).toBe(`1234,56${NBSP}€`);
   });
 
   it("negative: -50000 cents -> '-500,00 €'", () => {
@@ -48,8 +50,9 @@ describe("formatEur", () => {
     expect(formatEur(50000n)).toBe(`500,00${NBSP}€`);
   });
 
-  it("negative bigint input", () => {
-    expect(formatEur(-123456n)).toBe(`-1.234,56${NBSP}€`);
+  it("negative bigint input -123456n -> '-1234,56 €' (4-digit integer, no grouping separator)", () => {
+    // Same ICU rule: 4-digit integer part has no thousands dot.
+    expect(formatEur(-123456n)).toBe(`-1234,56${NBSP}€`);
   });
 });
 
