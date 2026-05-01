@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+/* Phase 1: minimal global styles. shadcn/ui will add CSS vars in plan 02. */
+html, body { height: 100%; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
