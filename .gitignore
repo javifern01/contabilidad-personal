@@ -45,8 +45,8 @@ yarn-error.log*
 next-env.d.ts
 
 # drizzle
-/drizzle/migrations/meta
-!/drizzle/migrations
+# Note: drizzle/migrations/meta is intentionally tracked — it contains _journal.json and
+# snapshots that drizzle-kit needs to apply migrations correctly. Do NOT exclude it.
 
 # editor
 .vscode/
