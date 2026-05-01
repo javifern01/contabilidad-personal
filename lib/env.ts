@@ -2,7 +2,23 @@ import { z } from "zod";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url().min(1, "DATABASE_URL is required"),
-  ENCRYPTION_KEY: z.string().min(1).optional(), // populated by plan 04
+  ENCRYPTION_KEY: z
+    .string()
+    .min(1, "ENCRYPTION_KEY is required (32 bytes base64-encoded)")
+    .refine(
+      (val) => {
+        try {
+          const decoded = Buffer.from(val, "base64");
+          return decoded.byteLength === 32;
+        } catch {
+          return false;
+        }
+      },
+      {
+        message:
+          "ENCRYPTION_KEY must be exactly 32 bytes after base64 decoding. Generate with: openssl rand -base64 32",
+      },
+    ),
   BETTER_AUTH_SECRET: z.string().min(32).optional(), // populated by plan 06
   BETTER_AUTH_URL: z.string().url().optional(), // populated by plan 06
   NODE_ENV: z
