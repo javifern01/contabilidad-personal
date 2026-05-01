@@ -1,0 +1,11 @@
+.next
+node_modules
+drizzle/migrations
+*.lock
+package-lock.json
+.env*
+!.env.example
+public
+.claude
+CLAUDE.md
+.planning
