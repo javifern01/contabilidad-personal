@@ -19,8 +19,12 @@ const envSchema = z.object({
           "ENCRYPTION_KEY must be exactly 32 bytes after base64 decoding. Generate with: openssl rand -base64 32",
       },
     ),
-  BETTER_AUTH_SECRET: z.string().min(32).optional(), // populated by plan 06
-  BETTER_AUTH_URL: z.string().url().optional(), // populated by plan 06
+  BETTER_AUTH_SECRET: z
+    .string()
+    .min(32, "BETTER_AUTH_SECRET must be at least 32 chars (generate with: openssl rand -hex 32)"),
+  BETTER_AUTH_URL: z
+    .string()
+    .url("BETTER_AUTH_URL must be a valid URL (e.g., http://localhost:3000)"),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
