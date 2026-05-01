@@ -69,8 +69,8 @@ describe("lib/crypto", () => {
       const { encryptString, decryptString } = await import("@/lib/crypto");
       const blob = encryptString("secret");
       const decoded = Buffer.from(blob, "base64");
-      // Flip the last byte (within ciphertext region)
-      decoded[decoded.byteLength - 1] = decoded[decoded.byteLength - 1] ^ 0xff;
+      // Flip the last byte (within ciphertext region) using writeUInt8 for type safety
+      decoded.writeUInt8(decoded.readUInt8(decoded.byteLength - 1) ^ 0xff, decoded.byteLength - 1);
       const tampered = decoded.toString("base64");
       expect(() => decryptString(tampered)).toThrow();
     });
