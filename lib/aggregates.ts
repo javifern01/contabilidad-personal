@@ -89,8 +89,21 @@ function withCache<TArgs extends readonly unknown[], TResult>(
     // errors, no surprises if Next renames its internal invariant message.
     return impl;
   }
-  return async (...args: TArgs): Promise<TResult> =>
-    unstable_cache(() => impl(...args), keyParts, options)();
+  // WR-NEW-05: hoist unstable_cache OUT of the per-call closure so the cached
+  // function reference is created ONCE per (impl, keyParts, options) tuple.
+  // The previous code re-wrapped the impl on every invocation, allocating a
+  // fresh closure each call. That defeats the same-request memoization Next
+  // maintains in front of the cache adapter — two `await getMonthlyKpis(input)`
+  // calls in one render would each perform their own lookup and (on miss)
+  // each hit the DB. Calling unstable_cache once at module scope is the
+  // canonical pattern from the Next 16 docs.
+  //
+  // Note: each top-level `getX = withCache(implX, ['x', JSON.stringify(args)],
+  // ...)` call site already binds keyParts to a specific input, so this
+  // module-scope wrapper is per-input. That's the intended granularity for
+  // the Next cache key (the input shape participates in the hash).
+  const cached = unstable_cache(impl, keyParts, options);
+  return cached;
 }
 
 // ---------- Module constants ----------
@@ -288,11 +301,18 @@ async function getMonthlyKpisImpl(input: MonthInput): Promise<MonthlyKpis> {
   };
 }
 
+// WR-NEW-05: hoist the cached wrapper to module scope so unstable_cache is
+// instantiated ONCE per export (not on every call). The function arguments
+// themselves are automatically incorporated into the cache key by Next 16's
+// unstable_cache, so keyParts only needs the namespace prefix to disambiguate
+// across different impls.
+const _cachedGetMonthlyKpis = withCache(
+  getMonthlyKpisImpl,
+  ["monthly-kpis"],
+  { tags: ["transactions", "dashboard"], revalidate: 3600 },
+);
 export const getMonthlyKpis = (input: MonthInput): Promise<MonthlyKpis> =>
-  withCache(getMonthlyKpisImpl, ["monthly-kpis", JSON.stringify(input)], {
-    tags: ["transactions", "dashboard"],
-    revalidate: 3600,
-  })(input);
+  _cachedGetMonthlyKpis(input);
 
 // ---------- getMonthlyKpisWithDelta ----------
 
@@ -328,14 +348,15 @@ async function getMonthlyKpisWithDeltaImpl(
   };
 }
 
+// WR-NEW-05: hoisted (see _cachedGetMonthlyKpis above).
+const _cachedGetMonthlyKpisWithDelta = withCache(
+  getMonthlyKpisWithDeltaImpl,
+  ["monthly-kpis-with-delta"],
+  { tags: ["transactions", "dashboard"], revalidate: 3600 },
+);
 export const getMonthlyKpisWithDelta = (
   input: MonthInput,
-): Promise<MonthlyKpisWithDelta> =>
-  withCache(
-    getMonthlyKpisWithDeltaImpl,
-    ["monthly-kpis-with-delta", JSON.stringify(input)],
-    { tags: ["transactions", "dashboard"], revalidate: 3600 },
-  )(input);
+): Promise<MonthlyKpisWithDelta> => _cachedGetMonthlyKpisWithDelta(input);
 
 // ---------- getCategoryBreakdown ----------
 
@@ -376,14 +397,15 @@ async function getCategoryBreakdownImpl(
   }));
 }
 
+// WR-NEW-05: hoisted (see _cachedGetMonthlyKpis above).
+const _cachedGetCategoryBreakdown = withCache(
+  getCategoryBreakdownImpl,
+  ["category-breakdown"],
+  { tags: ["transactions", "dashboard"], revalidate: 3600 },
+);
 export const getCategoryBreakdown = (
   input: MonthInput,
-): Promise<CategoryBreakdownRow[]> =>
-  withCache(
-    getCategoryBreakdownImpl,
-    ["category-breakdown", JSON.stringify(input)],
-    { tags: ["transactions", "dashboard"], revalidate: 3600 },
-  )(input);
+): Promise<CategoryBreakdownRow[]> => _cachedGetCategoryBreakdown(input);
 
 // ---------- getTrendSeries ----------
 
@@ -469,11 +491,14 @@ async function getTrendSeriesImpl(input: TrendInput): Promise<TrendSeriesRow[]> 
   return series;
 }
 
+// WR-NEW-05: hoisted (see _cachedGetMonthlyKpis above).
+const _cachedGetTrendSeries = withCache(
+  getTrendSeriesImpl,
+  ["trend-series"],
+  { tags: ["transactions", "dashboard"], revalidate: 3600 },
+);
 export const getTrendSeries = (input: TrendInput): Promise<TrendSeriesRow[]> =>
-  withCache(getTrendSeriesImpl, ["trend-series", JSON.stringify(input)], {
-    tags: ["transactions", "dashboard"],
-    revalidate: 3600,
-  })(input);
+  _cachedGetTrendSeries(input);
 
 // ---------- getTransactionsList ----------
 
@@ -571,6 +596,24 @@ function listInputCacheKey(input: TransactionsListInput): string {
   );
 }
 
+/**
+ * WR-NEW-05 NOTE: this export does NOT hoist the unstable_cache wrapper to
+ * module scope (unlike _cachedGetMonthlyKpis et al). Reason: the typed input
+ * carries bigint `min`/`max` filters, and Next 16's unstable_cache auto-hashes
+ * the function arguments via JSON.stringify, which throws on raw bigints. The
+ * existing pattern serializes bigints to strings via `listInputCacheKey()` and
+ * embeds the result as a `keyParts` entry — but that means keyParts varies
+ * per call, so a hoisted wrapper would not be reusable across distinct inputs.
+ *
+ * The cost of the per-call wrapping (one `unstable_cache(...)` allocation per
+ * list query) is bounded — list queries fire on page renders, not in tight
+ * loops — and avoiding it would require either (a) restructuring the call
+ * surface to take a pre-serialized key (intrusive across plan-04 callers) or
+ * (b) a per-key Map of pending typed inputs (raceable under concurrency, see
+ * earlier WIP commit). The other four hoisted exports give the bulk of the
+ * WR-NEW-05 benefit; the list query keeps the inline pattern with this
+ * documenting comment.
+ */
 export const getTransactionsList = (
   input: TransactionsListInput,
 ): Promise<TransactionListPage> =>
