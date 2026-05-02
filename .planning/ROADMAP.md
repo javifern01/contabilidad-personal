@@ -57,9 +57,9 @@ Plans:
 **Plans**: 9 plans across 5 waves
 Plans:
 
-**Wave 1** *(parallel; no dependencies)*
-- [ ] 02-01-PLAN.md — Drizzle schema (accounts, categories, transactions per D-16/D-18/D-20) + generated migration + seed-categories.ts (14 categories + Efectivo) + [BLOCKING] schema push to live Neon EU
-- [ ] 02-02-PLAN.md — shadcn primitives (sheet/select/badge/table/tabs/skeleton/popover/checkbox) + nuqs@~2.8.9 install + lib/format.ts formatMonthEs (D-41) + tests
+**Wave 1** *(parallel; no dependencies)* — ✓ complete
+- [x] 02-01-PLAN.md — Drizzle schema (accounts, categories, transactions per D-16/D-18/D-20) + generated migration + seed-categories.ts (14 categories + Efectivo) + [BLOCKING] schema push to live Neon EU
+- [x] 02-02-PLAN.md — shadcn primitives (sheet/select/badge/table/tabs/skeleton/popover/checkbox) + nuqs@~2.8.9 install + lib/format.ts formatMonthEs (D-41) + tests
 
 **Wave 2** *(blocked on Wave 1 completion; parallel within wave)*
 - [ ] 02-03-PLAN.md — Server Actions (addTransaction/editTransaction/softDeleteTransaction/restoreTransaction per D-42) + lib/dedup.ts (D-22 SHA-256 minute-truncated) + revalidateTag wiring (D-39)
