@@ -16,9 +16,13 @@
  *   but is restorable from a future "Papelera" view (Phase 7 PRIV-04).
  *
  * Error handling:
- *   - softDelete returns kind:'not_found' → "No se ha podido borrar. Reintenta."
- *   - restore   returns !ok              → "No se ha podido restaurar."
- *   Both surfaced as sonner error toasts (Spanish, peninsular tú-form).
+ *   - softDelete / restore returns kind:'validation' → "Solicitud no válida."
+ *     (WR-03: distinguishes a frontend bug passing the wrong identifier from
+ *     a stale row that no longer exists.)
+ *   - softDelete returns kind:'not_found'  → "No se ha podido borrar. Reintenta."
+ *   - restore   returns kind:'not_found'   → "No se ha podido restaurar."
+ *   - server_error                          → generic Spanish error copy.
+ *   All surfaced as sonner error toasts (Spanish, peninsular tú-form).
  */
 
 import { useQueryState } from "nuqs";
@@ -43,7 +47,14 @@ export function RowActions({ id }: RowActionsProps) {
   async function onDelete() {
     const result = await softDeleteTransaction(id);
     if (!result.ok) {
-      toast.error("No se ha podido borrar. Reintenta.");
+      // WR-03: distinguish kind:"validation" (frontend wired the wrong id —
+      // a real bug worth flagging differently) from kind:"not_found" (the
+      // expected stale-row case after concurrent navigation).
+      if (result.kind === "validation") {
+        toast.error("Solicitud no válida.");
+      } else {
+        toast.error("No se ha podido borrar. Reintenta.");
+      }
       return;
     }
     toast("Transacción borrada", {
@@ -53,8 +64,13 @@ export function RowActions({ id }: RowActionsProps) {
         label: "Deshacer",
         onClick: async () => {
           const r = await restoreTransaction(id);
-          if (r.ok) toast.success("Transacción restaurada");
-          else toast.error("No se ha podido restaurar.");
+          if (r.ok) {
+            toast.success("Transacción restaurada");
+          } else if (r.kind === "validation") {
+            toast.error("Solicitud no válida.");
+          } else {
+            toast.error("No se ha podido restaurar.");
+          }
         },
       },
     });

@@ -155,6 +155,12 @@ export type EditTransactionResult =
 
 export type SoftDeleteResult =
   | { ok: true }
+  // WR-03: distinguish malformed UUIDs from "no such row". A malformed UUID
+  // indicates a frontend bug passing the wrong identifier; collapsing it into
+  // not_found made debugging painful and contradicted the discriminated-union
+  // contract used by the other actions. Callers should surface a distinct
+  // toast for kind:"validation".
+  | { ok: false; kind: "validation"; fieldErrors: Record<string, string[]> }
   | { ok: false; kind: "not_found" }
   | { ok: false; kind: "server_error" };
 
@@ -453,7 +459,17 @@ export async function softDeleteTransaction(id: string): Promise<SoftDeleteResul
     return { ok: false, kind: "server_error" };
   }
   const idCheck = idSchema.safeParse(id);
-  if (!idCheck.success) return { ok: false, kind: "not_found" };
+  if (!idCheck.success) {
+    // WR-03: surface malformed UUID as kind:"validation", not "not_found".
+    // The two cases need different UX: validation = frontend wired the wrong
+    // id (toast "Solicitud no válida"); not_found = stale row (toast
+    // "Transacción no encontrada").
+    return {
+      ok: false,
+      kind: "validation",
+      fieldErrors: { id: idCheck.error.flatten().formErrors },
+    };
+  }
 
   try {
     // Only operate on rows that are not already soft-deleted, so a re-deletion
@@ -485,7 +501,14 @@ export async function restoreTransaction(id: string): Promise<RestoreResult> {
     return { ok: false, kind: "server_error" };
   }
   const idCheck = idSchema.safeParse(id);
-  if (!idCheck.success) return { ok: false, kind: "not_found" };
+  if (!idCheck.success) {
+    // WR-03: see softDeleteTransaction. Same rationale.
+    return {
+      ok: false,
+      kind: "validation",
+      fieldErrors: { id: idCheck.error.flatten().formErrors },
+    };
+  }
 
   try {
     // WR-02: scope the UPDATE to rows that are actually soft-deleted. Without
