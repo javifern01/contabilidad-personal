@@ -95,7 +95,11 @@ export function CategorySelect({
       required={required}
     >
       <SelectTrigger id={id} aria-label={ariaLabel} className="w-full">
-        <SelectValue placeholder="Selecciona una categoría" />
+        <SelectValue placeholder="Selecciona una categoría">
+          {(selected: string) =>
+            categories.find((c) => c.id === selected)?.name ?? selected
+          }
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {grouped.map((group) => (
