@@ -210,6 +210,37 @@ export function formatDateShortEs(d: Date): string {
 }
 
 /**
+ * Format a calendar month in Spanish "Mayo 2026" form (D-41).
+ *
+ * @param year  Four-digit year (e.g. 2026)
+ * @param month 1–12 (1 = January)
+ * @returns Capitalized "Mayo 2026" — the lowercase ICU output is uppercased on
+ *          the first character (CSS text-transform is unreliable for first-letter
+ *          Unicode and Spanish month names are pure ASCII so .toUpperCase() is safe).
+ *
+ * Anchor strategy: use day=15, hour=12 UTC. Day 15 is mid-month so DST transitions
+ * (last Sunday of March / October in Europe/Madrid) cannot push the date into a
+ * neighboring month. Hour 12 UTC is 13:00 or 14:00 in Madrid — safely inside the day.
+ *
+ * `de` connector handling: ICU's `es-ES` long-month-+-year format outputs
+ * "mayo de 2026" with a Spanish "de" connector. D-41 specifies "Mayo 2026"
+ * (no connector). The `.replace(/\s+de\s+/, " ")` strip handles this. If a future
+ * Node 20 ICU/CLDR drop emits a different form (e.g. just "mayo 2026"), the
+ * replace is a no-op and the result is still correct.
+ */
+export function formatMonthEs(year: number, month: number): string {
+  const anchor = new Date(Date.UTC(year, month - 1, 15, 12, 0, 0));
+  const formatter = new Intl.DateTimeFormat("es-ES", {
+    month: "long",
+    year: "numeric",
+    timeZone: TZ_MADRID,
+  });
+  const raw = formatter.format(anchor); // e.g. "mayo de 2026"
+  const cleaned = raw.replace(/\s+de\s+/, " ");
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/**
  * Returns the UTC Date instants bounding the calendar month that contains `d`
  * in the Europe/Madrid timezone. DST-correct: uses date-fns-tz fromZonedTime
  * to convert Madrid-local midnight to UTC, which respects IANA DST rules.
