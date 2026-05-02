@@ -23,42 +23,35 @@ const TABS: Array<{ href: string; label: string }> = [
 
 export function MobileBottomNav() {
   const pathname = usePathname();
+  const renderLink = (t: { href: string; label: string }) => {
+    const isActive = pathname === t.href;
+    return (
+      <Link
+        key={t.href}
+        href={t.href}
+        className={`flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-xs font-medium ${
+          isActive ? "text-foreground" : "text-muted-foreground"
+        }`}
+        aria-current={isActive ? "page" : undefined}
+      >
+        <span aria-hidden="true" className="text-lg">
+          ●
+        </span>
+        <span>{t.label}</span>
+      </Link>
+    );
+  };
+
+  // Layout: [Resumen | AddFab | Transacciones] — three siblings, each flex-1,
+  // so the buttons split the row in equal thirds at any width.
   return (
     <nav
       aria-label="Navegación inferior"
-      className="fixed inset-x-0 bottom-0 z-30 flex items-stretch justify-around border-t bg-background/95 backdrop-blur sm:hidden"
+      className="fixed inset-x-0 bottom-0 z-30 flex items-stretch border-t bg-background/95 backdrop-blur sm:hidden"
     >
-      {TABS.map((t, i) => {
-        const isActive = pathname === t.href;
-        const link = (
-          <Link
-            key={t.href}
-            href={t.href}
-            className={`flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-xs font-medium ${
-              isActive ? "text-foreground" : "text-muted-foreground"
-            }`}
-            aria-current={isActive ? "page" : undefined}
-          >
-            <span aria-hidden="true" className="text-lg">
-              ●
-            </span>
-            <span>{t.label}</span>
-          </Link>
-        );
-        // Insert AddFab between Resumen (i=0) and Transacciones (i=1)
-        if (i === 0) {
-          return (
-            <span
-              key="resumen-and-fab"
-              className="flex flex-1 items-stretch"
-            >
-              {link}
-              <AddFab variant="mobile" />
-            </span>
-          );
-        }
-        return link;
-      })}
+      {renderLink(TABS[0]!)}
+      <AddFab variant="mobile" />
+      {renderLink(TABS[1]!)}
     </nav>
   );
 }
