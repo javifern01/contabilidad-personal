@@ -14,6 +14,7 @@
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -46,10 +47,12 @@ export function UserMenu({ user }: { user: UserMenuUser }) {
         </Avatar>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel>
-          <div className="text-sm font-medium">{user.name || "Propietario"}</div>
-          <div className="text-xs text-muted-foreground">{user.email}</div>
-        </DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>
+            <div className="text-sm font-medium">{user.name || "Propietario"}</div>
+            <div className="text-xs text-muted-foreground">{user.email}</div>
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         {/* Phase 1: only Cerrar sesión per D-07. Phase 7+ adds Exportar datos, Cuenta, Ajustes. */}
         <form action={logoutAction}>
