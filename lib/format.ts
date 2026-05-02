@@ -241,6 +241,78 @@ export function formatMonthEs(year: number, month: number): string {
 }
 
 /**
+ * Returns the current calendar year + month in Europe/Madrid time. This is the
+ * canonical "what month is the user looking at?" anchor for dashboard widgets,
+ * trend windows, and form date prefills.
+ *
+ * Why we need this helper (CR-03, WR-08, WR-09 from REVIEW.md):
+ *   `new Date().getMonth()` reads the *server* TZ. Vercel functions run UTC. For
+ *   ~2 hours each summer day (CEST = UTC+2) and ~1 hour each winter day (CET =
+ *   UTC+1) the Madrid date is one day ahead of UTC — and once that next day
+ *   crosses a month boundary, the entire trend window / prefilled date is off
+ *   by one month. Client Components hydrate against the SSR markup, producing
+ *   a React hydration mismatch when client-local time disagrees with the
+ *   UTC-server-rendered value. This helper produces the same answer on both
+ *   runtimes (Node + every modern browser ships Europe/Madrid TZ data).
+ *
+ * Returns:
+ *   year:  4-digit Gregorian year
+ *   month: 1-indexed (1 = January … 12 = December)
+ *   yyyymm: "YYYY-MM" string for direct URL embedding (?mes= use case)
+ *
+ * Example (May 2 2026 00:30 Madrid CEST = May 1 22:30 UTC):
+ *   currentMadridMonth() → { year: 2026, month: 5, yyyymm: "2026-05" }
+ */
+export function currentMadridMonth(): {
+  year: number;
+  month: number;
+  yyyymm: string;
+} {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ_MADRID,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(now);
+  const year = Number(parts.find((p) => p.type === "year")?.value);
+  const month = Number(parts.find((p) => p.type === "month")?.value);
+  // Defensive: if Intl ever returns NaN here, fall back to UTC. Should never
+  // fire on Node 20+ / Chromium / WebKit / Firefox — all ship full ICU data.
+  const safeYear = Number.isFinite(year) ? year : now.getUTCFullYear();
+  const safeMonth = Number.isFinite(month) ? month : now.getUTCMonth() + 1;
+  return {
+    year: safeYear,
+    month: safeMonth,
+    yyyymm: `${safeYear.toString().padStart(4, "0")}-${safeMonth
+      .toString()
+      .padStart(2, "0")}`,
+  };
+}
+
+/**
+ * Returns "today" in Europe/Madrid as a YYYY-MM-DD calendar-date string
+ * (suitable for `<input type="date">` defaultValue, dedup keys, and SSR-stable
+ * date prefills). Same SSR/CSR-safe rationale as `currentMadridMonth` (WR-09).
+ *
+ * Example: at May 2 2026 00:30 Madrid CEST (May 1 22:30 UTC), returns "2026-05-02"
+ * regardless of whether the call happens on the Vercel UTC server or a Madrid
+ * laptop browser.
+ */
+export function todayMadridISO(): string {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ_MADRID,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const year = parts.find((p) => p.type === "year")?.value ?? "1970";
+  const month = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  return `${year}-${month}-${day}`;
+}
+
+/**
  * Returns the UTC Date instants bounding the calendar month that contains `d`
  * in the Europe/Madrid timezone. DST-correct: uses date-fns-tz fromZonedTime
  * to convert Madrid-local midnight to UTC, which respects IANA DST rules.
