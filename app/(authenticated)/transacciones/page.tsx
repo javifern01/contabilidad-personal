@@ -218,7 +218,19 @@ export default async function TransaccionesPage({
         total={listResult.total}
       />
 
+      {/*
+        WR-NEW-03: force a remount of QuickAddSheet whenever the URL switches
+        between add/edit targets. The Sheet's inputs use defaultValue (D-23
+        uncontrolled-form pattern), so without a key React reuses the existing
+        input nodes when ?editar=A → ?editar=B and the user sees row A's
+        prefilled values while the sheet is labeled as editing row B.
+        Submitting in that state would silently overwrite row B with row A's
+        content — a data-corruption risk. Keying on `editar ?? "add"` makes
+        React unmount/remount the Sheet on every target change, picking up
+        the freshly-fetched editTarget cleanly.
+      */}
       <QuickAddSheet
+        key={sp.editar ?? "add"}
         categories={allCategories}
         defaultCategoryId={defaultCat}
         editTarget={editTarget}
