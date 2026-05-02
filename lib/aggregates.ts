@@ -34,9 +34,12 @@ import {
   lte,
   sql,
 } from "drizzle-orm";
+import { fromZonedTime } from "date-fns-tz";
 import { db } from "@/lib/db";
 import { transactions, categories } from "@/drizzle/schema";
 import { currentMadridMonth } from "@/lib/format";
+
+const TZ_MADRID = "Europe/Madrid";
 
 /**
  * Detect whether we are running inside a Next.js request context (Server
@@ -152,12 +155,43 @@ export interface TransactionListPage {
 // ---------- Date helpers ----------
 
 /**
- * UTC half-open month range [start, endExclusive). booking_date is a calendar
- * `DATE` (no TZ), so UTC arithmetic is correct here — no Madrid TZ math needed.
+ * Madrid-anchored half-open month range [start, endExclusive).
+ *
+ * CR-NEW-01 fix: previously this returned UTC-midnight bounds (Date.UTC(year,
+ * month-1, 1)). On a Madrid client at the day-boundary (e.g. May 1 00:30 CEST =
+ * April 30 22:30 UTC), the rightmost-trend-bar window picked from
+ * `currentMadridMonth()` was anchored on Madrid month 5, but the WHERE clause
+ * compared against a UTC-midnight bound — and Postgres compared the DATE
+ * column by casting to UTC start-of-day. A row stored as `2026-04-30` (the
+ * Madrid user's "April 30" entry) was therefore filtered out of the May window
+ * AND bucketed under `'2026-04'` by `to_char(booking_date, 'YYYY-MM')`. The
+ * disagreement between the JS window and SQL bucket produced a missing
+ * rightmost-bar transaction at the boundary.
+ *
+ * Using Madrid-anchored bounds via `fromZonedTime` (matches `monthBoundaryMadrid`
+ * in lib/format.ts and D-32/D-35 dashboard semantics) makes the WHERE clause
+ * consistent with how a Madrid user perceives "this month": the bound is
+ * Madrid local midnight on the first of the month, expressed as a UTC instant.
+ *
+ * SQL bucket note: `to_char(booking_date, 'YYYY-MM')` is intentionally NOT
+ * cast through `AT TIME ZONE`. `booking_date` is a TZ-naive `DATE` already
+ * representing the user's typed Madrid calendar day; applying any TZ math
+ * would shift the bucket back across midnight (e.g. `2026-05-01::timestamp AT
+ * TIME ZONE 'Europe/Madrid'` → `2026-04-30 22:00:00 UTC` → bucket `'2026-04'`,
+ * which is the bug we are fixing, not a mitigation). The bucket stays as the
+ * stored calendar month and the JS window now matches it.
  */
 function monthRange(year: number, month: number): { start: Date; endExclusive: Date } {
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const endExclusive = new Date(Date.UTC(year, month, 1));
+  const startStr = `${year.toString().padStart(4, "0")}-${month
+    .toString()
+    .padStart(2, "0")}-01T00:00:00`;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextYear = month === 12 ? year + 1 : year;
+  const endStr = `${nextYear.toString().padStart(4, "0")}-${nextMonth
+    .toString()
+    .padStart(2, "0")}-01T00:00:00`;
+  const start = fromZonedTime(startStr, TZ_MADRID);
+  const endExclusive = fromZonedTime(endStr, TZ_MADRID);
   return { start, endExclusive };
 }
 
@@ -368,16 +402,24 @@ async function getTrendSeriesImpl(input: TrendInput): Promise<TrendSeriesRow[]> 
     ? eq(transactions.accountId, input.accountId)
     : undefined;
 
-  // CR-03: anchor the rolling window on the Madrid month, not the UTC server
-  // month. `to_char(booking_date, 'YYYY-MM')` below produces user-local YYYY-MM
-  // (booking_date is a calendar DATE that callers fill with the user's local
-  // day). At the day-boundary on a UTC server the JS `today.getUTCMonth()`
-  // could disagree with the SQL bucket by a whole month, shifting the rightmost
-  // bar to the wrong month. Matches D-32/D-35 dashboard semantics and the
-  // currentMadridMonth() anchor used by app/(authenticated)/page.tsx.
+  // CR-NEW-01: anchor the rolling window AND the WHERE bounds on the Madrid
+  // month. Using `monthRange()` (Madrid-anchored, see helper docstring) for the
+  // first month of the window keeps the SQL WHERE consistent with the
+  // `to_char(booking_date, 'YYYY-MM')` bucket — both interpret the stored DATE
+  // as the user's typed Madrid calendar day. Compare with the original CR-03
+  // partial fix that anchored only the JS month numbers via `currentMadridMonth`
+  // but kept UTC-midnight bounds via `Date.UTC`, which produced a
+  // rightmost-bar miss on a Madrid client at the day-boundary.
   const { year: nowY, month: nowM } = currentMadridMonth(); // 1-indexed
-  const startMonth = new Date(Date.UTC(nowY, nowM - 1 - (window - 1), 1));
-  const endExclusive = new Date(Date.UTC(nowY, nowM, 1));
+  // First month of the trend window in Madrid calendar arithmetic. We compute
+  // the offset month/year explicitly (instead of via `Date.UTC` overflow math)
+  // so we never accidentally re-introduce UTC semantics. e.g. nowM=5, window=12
+  // → startM=6 (June), startY=2025.
+  const totalShift = window - 1;
+  const startM = ((nowM - 1 - totalShift) % 12 + 12) % 12 + 1; // 1..12
+  const startY = nowY + Math.floor((nowM - 1 - totalShift) / 12);
+  const { start: startMonth } = monthRange(startY, startM);
+  const { endExclusive } = monthRange(nowY, nowM);
 
   const aggRows = await db
     .select({
@@ -409,12 +451,13 @@ async function getTrendSeriesImpl(input: TrendInput): Promise<TrendSeriesRow[]> 
 
   const series: TrendSeriesRow[] = [];
   for (let i = 0; i < window; i++) {
-    const d = new Date(
-      Date.UTC(startMonth.getUTCFullYear(), startMonth.getUTCMonth() + i, 1),
-    );
-    const key = `${d.getUTCFullYear().toString().padStart(4, "0")}-${pad2(
-      d.getUTCMonth() + 1,
-    )}`;
+    // Iterate Madrid calendar months from (startY, startM) onward; key matches
+    // `to_char(booking_date, 'YYYY-MM')` exactly because the stored DATE is the
+    // user's Madrid calendar day.
+    const m1 = startM - 1 + i; // 0-indexed month offset from startY-Jan
+    const y = startY + Math.floor(m1 / 12);
+    const m = (m1 % 12) + 1;
+    const key = `${y.toString().padStart(4, "0")}-${pad2(m)}`;
     const found = map.get(key) ?? { income: 0n, expense: 0n };
     series.push({
       month: key,
