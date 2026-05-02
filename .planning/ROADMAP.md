@@ -61,9 +61,9 @@ Plans:
 - [x] 02-01-PLAN.md — Drizzle schema (accounts, categories, transactions per D-16/D-18/D-20) + generated migration + seed-categories.ts (14 categories + Efectivo) + [BLOCKING] schema push to live Neon EU
 - [x] 02-02-PLAN.md — shadcn primitives (sheet/select/badge/table/tabs/skeleton/popover/checkbox) + nuqs@~2.8.9 install + lib/format.ts formatMonthEs (D-41) + tests
 
-**Wave 2** *(blocked on Wave 1 completion; parallel within wave)*
-- [ ] 02-03-PLAN.md — Server Actions (addTransaction/editTransaction/softDeleteTransaction/restoreTransaction per D-42) + lib/dedup.ts (D-22 SHA-256 minute-truncated) + revalidateTag wiring (D-39)
-- [ ] 02-04-PLAN.md — lib/aggregates.ts (5 cached functions: monthly KPIs, MoM delta, category breakdown, trend series, list pagination) per D-37/D-38/D-39/D-40
+**Wave 2** *(blocked on Wave 1 completion; parallel within wave)* — ✓ complete
+- [x] 02-03-PLAN.md — Server Actions (addTransaction/editTransaction/softDeleteTransaction/restoreTransaction per D-42) + lib/dedup.ts (D-22 SHA-256 minute-truncated) + revalidateTag wiring (D-39)
+- [x] 02-04-PLAN.md — lib/aggregates.ts (5 cached functions: monthly KPIs, MoM delta, category breakdown, trend series, list pagination) per D-37/D-38/D-39/D-40
 
 **Wave 3** *(blocked on Wave 2 completion; parallel within wave)*
 - [ ] 02-05-PLAN.md — QuickAddSheet (D-23..D-26 — 4 fields, ?nuevo=1/?editar={id}, sonner toasts) + CategorySelect (kind-grouped Gastos/Ingresos/Movimientos)
