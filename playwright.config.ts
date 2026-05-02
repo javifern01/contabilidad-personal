@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { loadEnv } from "vite";
 
 /**
  * Playwright config for Phase 1 acceptance tests.
@@ -6,6 +7,15 @@ import { defineConfig, devices } from "@playwright/test";
  * Local dev: `npm run test:e2e` auto-starts `next dev` and runs against localhost:3000.
  * Production smoke: `PLAYWRIGHT_BASE_URL=https://your-app.vercel.app npm run test:e2e:remote`.
  */
+
+// Load .env.local — Playwright doesn't auto-load it, but both the spawned dev
+// server (needs ENCRYPTION_KEY / BETTER_AUTH_SECRET / BETTER_AUTH_URL) AND the
+// Playwright runner itself (fixtures call hasDatabaseUrl() against process.env)
+// need these vars. Same pattern vitest.config.ts uses.
+const localEnv = loadEnv("development", process.cwd(), "");
+for (const [k, v] of Object.entries(localEnv)) {
+  if (!(k in process.env)) process.env[k] = v;
+}
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false, // Tests share a single owner; serialize for clean state
@@ -37,10 +47,12 @@ export default defineConfig({
         timeout: 120_000,
         reuseExistingServer: !process.env.CI,
         env: {
-          // Surface the test DATABASE_URL so the dev server uses the test branch
+          ...localEnv,
+          ...(process.env as Record<string, string>),
           DATABASE_URL:
             process.env.PLAYWRIGHT_TEST_DATABASE_URL ??
             process.env.DATABASE_URL ??
+            localEnv.DATABASE_URL ??
             "",
         },
       },

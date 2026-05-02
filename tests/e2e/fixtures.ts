@@ -1,15 +1,24 @@
 /**
  * Shared E2E test helpers.
  *
- * IMPORTANT: These helpers access the DB directly using the Drizzle client.
- * They require a running database (DATABASE_URL or PLAYWRIGHT_TEST_DATABASE_URL).
- * When DATABASE_URL is not set, DB-dependent helpers will throw — callers must
- * skip their test in that case.
- *
- * Path aliases (@/) are resolved by Playwright via tsconfig.json paths config.
+ * IMPORTANT: These helpers access the DB directly via the Drizzle client.
+ * playwright.config.ts loads .env.local before workers spawn, so DATABASE_URL
+ * is always present at module evaluation time.
  */
 
 import { eq, sql } from "drizzle-orm";
+import { db } from "../../lib/db";
+import {
+  user,
+  session,
+  account,
+  authAuditLog,
+  verification,
+  transactions,
+  categories,
+  accounts,
+} from "../../drizzle/schema";
+import { auth } from "../../lib/auth";
 
 export const TEST_OWNER = {
   email: "owner-e2e@example.test",
@@ -30,19 +39,8 @@ export function hasDatabaseUrl(): boolean {
 /**
  * Wipe all auth state and create a single owner for the test run.
  * Must be called in test.beforeEach for any spec that depends on owner state.
- *
- * Requires DATABASE_URL or PLAYWRIGHT_TEST_DATABASE_URL to be set.
  */
 export async function resetAndCreateOwner(): Promise<void> {
-  const { db } = await import("../../lib/db");
-  const {
-    user,
-    session,
-    account,
-    authAuditLog,
-    verification,
-  } = await import("../../drizzle/schema");
-
   // Order matters: delete child tables first (FK constraints)
   await db.delete(authAuditLog);
   await db.delete(session);
@@ -51,7 +49,6 @@ export async function resetAndCreateOwner(): Promise<void> {
   await db.delete(user);
 
   // Use Better Auth via API to create the owner so password hashing matches login.
-  const { auth } = await import("../../lib/auth");
   await auth.api.signUpEmail({
     body: {
       email: TEST_OWNER.email,
@@ -65,8 +62,6 @@ export async function resetAndCreateOwner(): Promise<void> {
  * Delete audit log rows for a specific IP address.
  */
 export async function deleteAuditRowsForIp(ip: string): Promise<void> {
-  const { db } = await import("../../lib/db");
-  const { authAuditLog } = await import("../../drizzle/schema");
   await db.delete(authAuditLog).where(eq(authAuditLog.ip, ip));
 }
 
@@ -74,8 +69,6 @@ export async function deleteAuditRowsForIp(ip: string): Promise<void> {
  * Get audit log rows for a specific IP, ordered by occurredAt ascending.
  */
 export async function getAuditRowsForIp(ip: string) {
-  const { db } = await import("../../lib/db");
-  const { authAuditLog } = await import("../../drizzle/schema");
   return db
     .select()
     .from(authAuditLog)
@@ -88,7 +81,6 @@ export async function getAuditRowsForIp(ip: string) {
  */
 export async function dbReachable(): Promise<boolean> {
   try {
-    const { db } = await import("../../lib/db");
     await db.execute(sql`SELECT 1`);
     return true;
   } catch {
@@ -131,8 +123,6 @@ export async function loginAsOwner(page: Page): Promise<void> {
  *   accounts; Phase 2 specs rely on the single account always being present.
  */
 export async function resetTransactions(): Promise<void> {
-  const { db } = await import("../../lib/db");
-  const { transactions } = await import("../../drizzle/schema");
   await db.delete(transactions);
 }
 
@@ -161,12 +151,6 @@ export async function insertTestTransaction(input: {
   description: string;
   categoryKind: "expense" | "income" | "transfer";
 }): Promise<void> {
-  const { db } = await import("../../lib/db");
-  const { transactions, categories, accounts } = await import(
-    "../../drizzle/schema"
-  );
-  const { eq } = await import("drizzle-orm");
-
   const cat = await db
     .select()
     .from(categories)
