@@ -179,6 +179,25 @@ describe.skipIf(!RUN)("getMonthlyKpisWithDelta (D-37, D-33)", () => {
     // 100 / 1000 = 10.0%
     expect(result.delta_pct.income).toBeCloseTo(10.0, 1);
   });
+
+  it("delta on a kpi component with prior=0 but txn_count>0 returns null (div-by-zero guard)", async () => {
+    // Prior month has rows (so priorIsEmpty=false), but the income component is 0
+    // because the only prior row is an expense. Current month has income.
+    // Expected: delta_pct.income === null (pctDelta sees prior=0 with current!=0 → null).
+    const inc = await getCat("income");
+    const exp = await getCat("expense");
+    await insertTxn({ account, category: exp, bookingDate: "2026-04-15", amountCents: 1000n });
+    await insertTxn({ account, category: inc, bookingDate: "2026-05-15", amountCents: 1100n });
+    const result = await getMonthlyKpisWithDelta({
+      year: 2026,
+      month: 5,
+      accountId: account.id,
+    });
+    // Prior month has 1 expense row → priorIsEmpty = false. But prior.income_cents = 0.
+    expect(result.delta_pct.income).toBeNull();
+    // Expense component went from 1000 → 0: prior nonzero, current 0 → -100.0%.
+    expect(result.delta_pct.expense).toBeCloseTo(-100.0, 1);
+  });
 });
 
 describe.skipIf(!RUN)("getCategoryBreakdown (D-37, D-40)", () => {
