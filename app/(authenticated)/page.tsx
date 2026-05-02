@@ -19,7 +19,7 @@ import {
   getMonthlyKpisWithDelta,
   getTrendSeries,
 } from "@/lib/aggregates";
-import { formatMonthEs } from "@/lib/format";
+import { currentMadridMonth as currentMadridMonthLib, formatMonthEs } from "@/lib/format";
 import { CategoryBarChart } from "./_components/CategoryBarChart";
 import { KpiCards } from "./_components/KpiCards";
 import { MonthlyTrendChart } from "./_components/MonthlyTrendChart";
@@ -40,32 +40,16 @@ interface MonthSelection {
 }
 
 /**
- * Compute the current Madrid month using `Intl.DateTimeFormat` with the
- * Europe/Madrid timezone — the server clock may be UTC on Vercel, so naive
- * `new Date().getMonth()` could land in the wrong month at the day boundary.
+ * Wrap the shared `currentMadridMonth()` helper from `lib/format.ts` to attach
+ * the page-local `mesValue` field (the URL-state-friendly "YYYY-MM" form used
+ * for `?mes=` defaulting). The helper itself produces identical output on UTC
+ * server and Madrid browser, so the dashboard, MonthPicker (WR-08) and
+ * QuickAddSheet (WR-09) share one source of truth and stay hydration-stable.
  * Phase 7 UX-04 covers DST-edge snapshot tests.
  */
 function currentMadridMonth(): MonthSelection {
-  const now = new Date();
-  const fmt = new Intl.DateTimeFormat("es-ES", {
-    timeZone: "Europe/Madrid",
-    year: "numeric",
-    month: "2-digit",
-  });
-  const parts = fmt.formatToParts(now);
-  const year = Number(
-    parts.find((p) => p.type === "year")?.value ?? now.getFullYear(),
-  );
-  const month = Number(
-    parts.find((p) => p.type === "month")?.value ?? now.getMonth() + 1,
-  );
-  return {
-    year,
-    month,
-    mesValue: `${year.toString().padStart(4, "0")}-${month
-      .toString()
-      .padStart(2, "0")}`,
-  };
+  const { year, month, yyyymm } = currentMadridMonthLib();
+  return { year, month, mesValue: yyyymm };
 }
 
 /**
@@ -93,6 +77,10 @@ export default async function DashboardPage({
 }) {
   const sp = await searchParams;
   const { year, month, mesValue } = parseMes(sp.mes);
+  // Anchor the MonthPicker option list on the current Madrid month, computed
+  // identically on server and client, so the SSR markup and CSR hydration
+  // agree at the day boundary (WR-08).
+  const anchor = currentMadridMonth();
 
   // DASH-07: dashboard reads only via lib/aggregates.ts (cached + DB);
   // no synchronous calls to anthropic.com or any PSD2 aggregator.
@@ -115,7 +103,10 @@ export default async function DashboardPage({
         <h1 className="text-xl font-semibold">
           Resumen — {formatMonthEs(year, month)}
         </h1>
-        <MonthPicker defaultValue={mesValue} />
+        <MonthPicker
+          defaultValue={mesValue}
+          currentMonth={{ year: anchor.year, month: anchor.month }}
+        />
       </header>
 
       <KpiCards data={kpis} />
