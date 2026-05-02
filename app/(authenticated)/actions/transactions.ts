@@ -52,7 +52,7 @@ import { headers } from "next/headers";
 // `revalidateTag("transactions"); revalidateTag("dashboard");` per D-39 — matching
 // the plan-spec'd invariant grep — while delegating to the correct Next 16 API.
 import { updateTag, revalidateTag as revalidateTagLegacy } from "next/cache";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, isNotNull } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -488,15 +488,40 @@ export async function restoreTransaction(id: string): Promise<RestoreResult> {
   if (!idCheck.success) return { ok: false, kind: "not_found" };
 
   try {
-    // No `isNull` guard here — restore must succeed regardless of current
-    // soft_deleted_at state (idempotent restore).
+    // WR-02: scope the UPDATE to rows that are actually soft-deleted. Without
+    // this guard, calling restoreTransaction on a non-deleted row bumped
+    // updated_at for no reason and returned ok:true, defeating audit
+    // traceability and showing a misleading "Transacción restaurada" toast for
+    // a no-op. With the guard, an UPDATE on an already-active row returns
+    // zero rows; we then disambiguate "row never existed" from "row was never
+    // deleted" with a follow-up SELECT so callers get meaningful feedback.
     const updated = await db
       .update(transactions)
       .set({ softDeletedAt: null, updatedAt: new Date() })
-      .where(eq(transactions.id, id))
+      .where(and(eq(transactions.id, id), isNotNull(transactions.softDeletedAt)))
       .returning({ id: transactions.id });
 
-    if (updated.length === 0) return { ok: false, kind: "not_found" };
+    if (updated.length === 0) {
+      // Disambiguate: did the row never exist, or was it already active?
+      // Both produce kind:"not_found" today (no kind:"already_active" yet —
+      // adding a new variant is a wider API change than this fix should make),
+      // but logging the distinction lets us add the variant later without
+      // losing observability in the meantime.
+      const exists = await db
+        .select({ id: transactions.id })
+        .from(transactions)
+        .where(eq(transactions.id, id))
+        .limit(1);
+      logger.info(
+        {
+          id,
+          kind: "restore_noop",
+          reason: exists.length === 0 ? "missing" : "already_active",
+        },
+        "transaction_restore_noop",
+      );
+      return { ok: false, kind: "not_found" };
+    }
 
     revalidateTag("transactions");
     revalidateTag("dashboard");
