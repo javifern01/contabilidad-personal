@@ -70,8 +70,8 @@ Plans:
 - [x] 02-07-PLAN.md — / dashboard (replaces Phase 1 placeholder) — KpiCards + MoMDelta + CategoryBarChart (top-8+Otros + drilldown) + MonthlyTrendChart (ComposedChart with <3-month empty state) + MonthPicker (D-31..D-36)
 - [x] 02-08-PLAN.md — Authenticated layout: TopNav (Resumen/Transacciones) + AddFab (URL-state-preserving per UX-02) + MobileBottomNav (D-43); preserves Phase 1 session redirect + UserMenu
 
-**Wave 4** *(blocked on Wave 3 completion; consumes QuickAddSheet from 02-05)*
-- [ ] 02-06-PLAN.md — /transacciones page (RSC reading nuqs URL state) + Filters (multi-select category Popover per LIST-03 / D-28) + TransactionList + SourceBadge (Manual badge per D-29) + RowActions (Deshacer 5s toast) + Pagination + route-specific error.tsx (LIST-05) (D-27..D-30)
+**Wave 4** *(blocked on Wave 3 completion; consumes QuickAddSheet from 02-05)* — ✓ complete
+- [x] 02-06-PLAN.md — /transacciones page (RSC reading nuqs URL state) + Filters (multi-select category Popover per LIST-03 / D-28) + TransactionList + SourceBadge (Manual badge per D-29) + RowActions (Deshacer 5s toast) + Pagination + route-specific error.tsx (LIST-05) (D-27..D-30)
 
 **Wave 5** *(blocked on Wave 4 completion; final E2E gate)*
 - [ ] 02-09-PLAN.md — Playwright E2E covering ROADMAP success criteria 1-5: transactions.spec.ts (MAN+LIST+UX incl. multi-select filter, error.tsx boundary, FAB URL-state preservation) + dashboard.spec.ts (DASH+UX with cat=&mes= drilldown assertion) + fixtures.ts extensions

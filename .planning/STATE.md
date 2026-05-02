@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 — Wave 3 of 5 complete
-last_updated: "2026-05-02T12:30:00.000Z"
-last_activity: "2026-05-02 — Phase 2 Wave 3 complete (02-05 QuickAddSheet, 02-07 dashboard with recharts, 02-08 layout+nav); 219/219 tests pass, next build green"
+stopped_at: Phase 2 — Wave 4 of 5 complete
+last_updated: "2026-05-02T12:45:00.000Z"
+last_activity: "2026-05-02 — Phase 2 Wave 4 complete (02-06 /transacciones page + Filters + RowActions + NuqsAdapter mount fix); 219/219 tests, build green, route registered"
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 17
-  completed_plans: 15
-  percent: 88
+  completed_plans: 16
+  percent: 94
 ---
 
 # Project State
