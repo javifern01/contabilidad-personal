@@ -353,25 +353,31 @@ test.describe("MAN-01..05 / LIST-01..05 / UX-02 — manual transaction lifecycle
     await expect(page.getByText("cena-restaurantes")).toBeVisible();
   });
 
-  test("LIST-05 — route-specific error.tsx renders Spanish copy + Reintentar recovers", async ({
+  test("LIST-05 — /transacciones recovers cleanly after a failed navigation", async ({
     page,
   }) => {
-    // The route-level error.tsx (app/(authenticated)/transacciones/error.tsx) is
-    // verbatim asserted here: "No se han podido cargar las transacciones.
-    // Reintenta." + a "Reintentar" button.
+    // WR-05: the previous version of this test asserted
+    //   `expect(boundaryVisible || retryVisible || true).toBe(true)`
+    // which always passed regardless of whether the error boundary actually
+    // rendered — worse than no test (gave false confidence that LIST-05 was
+    // covered).
     //
-    // Forcing the underlying RSC to throw without modifying app code is brittle
-    // — the cleanest deterministic trigger we can use from Playwright is to
-    // mock the document HTTP response so the React error boundary upstream
-    // surfaces. The mock returns a 500 for the navigation, then we unroute and
-    // navigate again to verify a successful subsequent load.
+    // Forcing the route-level error.tsx to render without modifying app code
+    // is genuinely hard: route.fulfill() with a 500 body bypasses the React
+    // render lifecycle (so error.tsx never runs), and adding a hidden
+    // ?_throw_test=1 server-side hook just for tests would land production
+    // code that intentionally throws — a worse trade than dropping the
+    // boundary-copy assertion.
     //
-    // KNOWN LIMITATION: when route.fulfill replaces the navigation HTML with a
-    // synthetic body, Next.js's error boundary may not run because we never
-    // entered the React render lifecycle. The assertion below uses a generous
-    // timeout and a relaxed query so the test still proves the boundary copy
-    // is what app code emits when an error is thrown — see SUMMARY.md "Known
-    // Issues" for follow-up.
+    // We narrow this test to what we CAN deterministically prove from
+    // Playwright: a 500 navigation does not corrupt the SPA — the next
+    // visit to /transacciones renders the row list correctly. The boundary
+    // copy itself is verified via:
+    //   - app/(authenticated)/transacciones/error.tsx source (it is the
+    //     verbatim CONTEXT specifics LIST-05 string), and
+    //   - the route-level Vitest unit test (Plan 06) that imports error.tsx
+    //     and snapshot-matches the rendered Spanish copy.
+    // SUMMARY.md "Known Issues" tracks the gap.
     await insertTestTransaction({
       bookingDate: "2026-04-01",
       amountCents: 1000n,
@@ -379,18 +385,15 @@ test.describe("MAN-01..05 / LIST-01..05 / UX-02 — manual transaction lifecycle
       categoryKind: "expense",
     });
 
-    // Verify the boundary copy + Reintentar button are wired up by directly
-    // visiting a known-good page first; once we're sure the test owner is
-    // logged in, we attempt the failure injection.
+    // Baseline: known-good page renders the seeded row.
     await page.goto("/transacciones");
     await expect(page.getByText("real-row")).toBeVisible();
 
-    // Inject a navigation failure: route the next request to /transacciones to
-    // a 500 response. error.tsx wraps the page so a render error there should
-    // bubble up to it.
+    // Inject a 500 on the next ?_throw=1 navigation (only the document, not
+    // its asset dependencies — keeps the SPA chrome alive for the recovery
+    // assertion below).
     await page.route("**/transacciones**", async (route, request) => {
       const url = request.url();
-      // Only fail the document navigation, not assets/data dependencies.
       if (request.resourceType() === "document" && url.includes("_throw=1")) {
         await route.fulfill({ status: 500, body: "boom" });
       } else {
@@ -399,38 +402,14 @@ test.describe("MAN-01..05 / LIST-01..05 / UX-02 — manual transaction lifecycle
     });
 
     await page.goto("/transacciones?_throw=1").catch(() => {
-      // A 500 navigation may surface as a Playwright navigation error in some
-      // environments; we swallow it so the assertions below run.
+      // 500 navigation may surface as a Playwright nav error; swallow so the
+      // recovery assertion runs.
     });
 
-    // The boundary copy is verbatim from CONTEXT specifics LIST-05. We assert
-    // either the boundary text is visible OR the "Reintentar" button is, so
-    // the test is robust to whether Next.js renders the boundary on a synthetic
-    // 500 (some runtimes show the dev-mode error overlay instead).
-    const boundaryCopy = page.getByText(
-      "No se han podido cargar las transacciones. Reintenta.",
-    );
-    const retryButton = page.getByRole("button", { name: "Reintentar" });
-
-    // Best-effort assertion — at least one of the boundary elements appears
-    // when the navigation 500 surfaces. If neither appears (because Next renders
-    // the dev overlay), the test still validates that the route mock fired
-    // (the page navigated).
-    const boundaryVisible = await boundaryCopy
-      .first()
-      .isVisible()
-      .catch(() => false);
-    const retryVisible = await retryButton
-      .first()
-      .isVisible()
-      .catch(() => false);
-    expect(boundaryVisible || retryVisible || true).toBe(true);
-
-    // Click Reintentar if it rendered — then unroute and verify list recovers.
+    // Recovery: unroute and navigate to the clean URL. The row list must
+    // render — proves the SPA + RSC pipeline is intact after the synthetic
+    // failure (the actual scope this test can credibly cover).
     await page.unroute("**/transacciones**");
-    if (retryVisible) {
-      await retryButton.click();
-    }
     await page.goto("/transacciones");
     await expect(page.getByText("real-row")).toBeVisible();
   });
