@@ -77,7 +77,16 @@ function dateRange(): { earliest: Date; latest: Date } {
   return { earliest, latest };
 }
 
-const addTransactionSchema = z.object({
+/**
+ * Shared field shape for the four user-supplied fields (D-24). Forked into add
+ * and edit schemas below: WR-06 drops `account_id` from the add surface so the
+ * form cannot supply a non-default account UUID (Phase 2 has one account; Phase
+ * 4 introduces an ownership-bound picker), and CR-01 forks the edit schema for
+ * the same reason — `editTransaction` deliberately does not let the user move
+ * a row between accounts (no UI surface for it, and the dedup_key recomputation
+ * below uses the existing row's accountId, not a form value).
+ */
+const baseTransactionFields = {
   amount: z
     .string()
     .min(1, { message: "El importe es obligatorio." })
@@ -107,8 +116,21 @@ const addTransactionSchema = z.object({
     .min(1, { message: "La descripción es obligatoria." })
     .max(200, { message: "La descripción no puede superar los 200 caracteres." }),
   category_id: z.string().uuid({ message: "Categoría no válida." }),
-  account_id: z.string().uuid().optional(),
-});
+};
+
+const addTransactionSchema = z.object(baseTransactionFields);
+
+/**
+ * Edit schema. Identical to add at Phase 2: same four user-controlled fields.
+ * Kept as a separate schema (rather than re-using addTransactionSchema)
+ * because:
+ *   - editTransaction must NOT accept account_id from form data (CR-01) — the
+ *     existing row's accountId is loaded server-side and re-used in the dedup
+ *     recomputation, so the API surface should not lie about what is honoured.
+ *   - Phase 4 will likely diverge (e.g. allow editing booking_date but not
+ *     account_id once PSD2-synced rows exist).
+ */
+const editTransactionSchema = z.object(baseTransactionFields);
 
 const idSchema = z.string().uuid({ message: "ID no válido." });
 
@@ -124,6 +146,11 @@ export type EditTransactionResult =
   | { ok: true }
   | { ok: false; kind: "validation"; fieldErrors: Record<string, string[]> }
   | { ok: false; kind: "not_found" }
+  // CR-01: edits recompute dedup_key (D-22), so an edit that pushes the row's
+  // content onto an existing minute-bucketed key collides on the unique index.
+  // Surface as kind:"duplicate" so the form can render the canonical Spanish
+  // dedup-collision copy, mirroring addTransaction.
+  | { ok: false; kind: "duplicate" }
   | { ok: false; kind: "server_error" };
 
 export type SoftDeleteResult =
@@ -221,7 +248,6 @@ export async function addTransaction(formData: FormData): Promise<AddTransaction
     booking_date: formData.get("booking_date"),
     description: formData.get("description"),
     category_id: formData.get("category_id"),
-    account_id: formData.get("account_id") || undefined,
   });
 
   if (!parsed.success) {
@@ -233,7 +259,10 @@ export async function addTransaction(formData: FormData): Promise<AddTransaction
   }
 
   const { amount, booking_date, description, category_id } = parsed.data;
-  const account_id = parsed.data.account_id ?? (await defaultAccountId());
+  // WR-06: account_id is NOT accepted from the form (no UI surface, no
+  // ownership check exists yet — Phase 4 adds accounts.owner_user_id and a
+  // bounded picker). Always resolve the seeded 'Efectivo' account.
+  const account_id = await defaultAccountId();
 
   const dedupKey = computeManualDedupKey({
     accountId: account_id,
@@ -316,12 +345,13 @@ export async function editTransaction(
     };
   }
 
-  const parsed = addTransactionSchema.safeParse({
+  const parsed = editTransactionSchema.safeParse({
     amount: formData.get("amount"),
     booking_date: formData.get("booking_date"),
     description: formData.get("description"),
     category_id: formData.get("category_id"),
-    account_id: formData.get("account_id") || undefined,
+    // CR-01: account_id is NOT read from the form. The existing row's accountId
+    // is loaded server-side below and re-used in the dedup_key recomputation.
   });
 
   if (!parsed.success) {
@@ -335,8 +365,38 @@ export async function editTransaction(
   const { amount, booking_date, description, category_id } = parsed.data;
 
   try {
-    // The `isNull(softDeletedAt)` clause makes this a no-op for soft-deleted rows;
-    // the .returning empty result then surfaces as kind:"not_found" per D-42.
+    // CR-01: load the existing row first so we can (a) detect not_found
+    // explicitly (vs. the previous "no rows returned by UPDATE" inference,
+    // which conflated soft-deleted with non-existent), and (b) re-use the
+    // stored accountId in the dedup_key recomputation below.
+    const existingRows = await db
+      .select({
+        id: transactions.id,
+        accountId: transactions.accountId,
+      })
+      .from(transactions)
+      .where(and(eq(transactions.id, id), isNull(transactions.softDeletedAt)))
+      .limit(1);
+
+    if (existingRows.length === 0) {
+      return { ok: false, kind: "not_found" };
+    }
+    const existingRow = existingRows[0]!;
+
+    // CR-01: recompute the dedup_key on every edit. Without this, a row whose
+    // amount/date/description was edited would keep its OLD content-hash key,
+    // and a subsequent identical add against the NEW content would not collide
+    // — silently violating the D-22 dedup contract for the post-edit state.
+    // The minute-bucketed anchorMs (Date.now()) means edits ≥1 minute apart
+    // each get a fresh bucket, matching the add-side behaviour exactly.
+    const newDedupKey = computeManualDedupKey({
+      accountId: existingRow.accountId,
+      bookingDate: booking_date,
+      amountCents: amount,
+      description,
+      anchorMs: Date.now(),
+    });
+
     const updated = await db
       .update(transactions)
       .set({
@@ -345,11 +405,14 @@ export async function editTransaction(
         bookingDate: booking_date,
         descriptionRaw: description,
         categoryId: category_id,
+        dedupKey: newDedupKey,
         updatedAt: new Date(),
       })
       .where(and(eq(transactions.id, id), isNull(transactions.softDeletedAt)))
       .returning({ id: transactions.id });
 
+    // Defensive: row could have been soft-deleted between the SELECT and the
+    // UPDATE (concurrent delete in a different tab). Treat as not_found.
     if (updated.length === 0) {
       return { ok: false, kind: "not_found" };
     }
@@ -362,6 +425,13 @@ export async function editTransaction(
     );
     return { ok: true };
   } catch (err: unknown) {
+    // CR-01: edit can now collide on the (account_id, dedup_key) unique index
+    // because we recompute the key. Surface as duplicate so the UI can render
+    // the canonical Spanish dedup-collision copy.
+    if (isUniqueViolation(err)) {
+      logger.info({ kind: "duplicate", id }, "transaction_edit_duplicate_rejected");
+      return { ok: false, kind: "duplicate" };
+    }
     if (isFkViolation(err)) {
       return {
         ok: false,
