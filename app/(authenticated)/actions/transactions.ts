@@ -81,7 +81,7 @@ const TZ_MADRID = "Europe/Madrid";
  * 23:59:59.999 UTC, rejecting a perfectly reasonable `booking_date = "May 3"`
  * (today+1 from the user's perspective is May 3, not May 2).
  *
- * Compute the bounds on the Madrid calendar via `todayMadridISO()`, then
+ * Compute the bounds on the Madrid calendar via `todayMadridISO(now)`, then
  * convert to UTC instants via `fromZonedTime` — same pattern as
  * `monthBoundaryMadrid` in lib/format.ts and CR-NEW-01 in lib/aggregates.ts.
  * Now the upper bound moves with the user's local day-of-week, not the
@@ -90,13 +90,19 @@ const TZ_MADRID = "Europe/Madrid";
  * Earliest: 5 years before today (Madrid), at Madrid midnight.
  * Latest:   1 day after today (Madrid), at Madrid 23:59:59.999.
  *
- * `now` is still accepted (and the helper still computes via wall-clock) so
- * the per-request determinism rationale from WR-07 survives — the helper is
- * called once at action entry and the parsed `now` instant is shared by
- * `todayMadridISO()` (which itself reads `new Date()` once internally).
+ * WR-NEW-06: the `now` parameter is honored end-to-end. Previously the
+ * signature took `_now: Date` but the body ignored it and re-read the wall
+ * clock via `todayMadridISO()` (which itself called `new Date()` internally).
+ * That broke WR-07's per-request-determinism contract at the type-system
+ * level — callers thought they were injecting a clock, but the function
+ * silently re-read it. Now `todayMadridISO(now)` accepts an optional instant
+ * and the call here forwards `now`, so a single action invocation shares one
+ * canonical "now" for all booking-date clamp math. This also makes
+ * `dateRange` injectable for tests via `vi.setSystemTime` OR direct
+ * `new Date(...)` argument without touching globals.
  */
-function dateRange(_now: Date): { earliest: Date; latest: Date } {
-  const today = todayMadridISO(); // YYYY-MM-DD in Madrid
+function dateRange(now: Date): { earliest: Date; latest: Date } {
+  const today = todayMadridISO(now); // YYYY-MM-DD in Madrid for the given instant
   const [yStr, mStr, dStr] = today.split("-");
   const y = Number(yStr);
   const m = Number(mStr);

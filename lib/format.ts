@@ -297,9 +297,14 @@ export function currentMadridMonth(): {
  * Example: at May 2 2026 00:30 Madrid CEST (May 1 22:30 UTC), returns "2026-05-02"
  * regardless of whether the call happens on the Vercel UTC server or a Madrid
  * laptop browser.
+ *
+ * WR-NEW-06: optional `instant` parameter lets callers pin the calculation to a
+ * specific point in time (used by `dateRange(now)` in actions/transactions.ts to
+ * honor the per-request `now` from `buildTransactionSchema`). When omitted, the
+ * function reads the wall clock — same behaviour as before.
  */
-export function todayMadridISO(): string {
-  const now = new Date();
+export function todayMadridISO(instant?: Date): string {
+  const now = instant ?? new Date();
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ_MADRID,
     year: "numeric",
