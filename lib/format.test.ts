@@ -4,6 +4,7 @@ import {
   parseEurInput,
   formatDateEs,
   formatDateShortEs,
+  formatMonthEs,
   monthBoundaryMadrid,
 } from "@/lib/format";
 
@@ -145,6 +146,39 @@ describe("formatDateShortEs", () => {
     expect(formatDateShortEs(new Date("2026-12-25T12:00:00Z"))).toBe(
       "25/12/2026",
     );
+  });
+});
+
+describe("formatMonthEs (D-41)", () => {
+  it("formats May 2026 as 'Mayo 2026'", () => {
+    expect(formatMonthEs(2026, 5)).toBe("Mayo 2026");
+  });
+
+  it("formats January 2026 as 'Enero 2026'", () => {
+    expect(formatMonthEs(2026, 1)).toBe("Enero 2026");
+  });
+
+  it("formats December 2026 as 'Diciembre 2026'", () => {
+    expect(formatMonthEs(2026, 12)).toBe("Diciembre 2026");
+  });
+
+  it("formats DST-transition months without month-drift (March)", () => {
+    // DST starts last Sunday of March in Europe/Madrid (2026-03-29).
+    // Day-15 anchor at 12:00 UTC stays safely inside March in Madrid.
+    expect(formatMonthEs(2026, 3)).toBe("Marzo 2026");
+  });
+
+  it("formats DST-transition months without month-drift (October)", () => {
+    // DST ends 2026-10-25 in Europe/Madrid; day-15 anchor avoids any drift.
+    expect(formatMonthEs(2026, 10)).toBe("Octubre 2026");
+  });
+
+  it("returns capitalized first letter for every month of 2026", () => {
+    for (let m = 1; m <= 12; m++) {
+      const out = formatMonthEs(2026, m);
+      expect(out.charAt(0)).toMatch(/^[A-Z]$/);
+      expect(out).toMatch(/\s\d{4}$/); // ends with " YYYY"
+    }
   });
 });
 
