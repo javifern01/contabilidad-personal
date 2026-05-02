@@ -36,6 +36,7 @@ import {
 } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { transactions, categories } from "@/drizzle/schema";
+import { currentMadridMonth } from "@/lib/format";
 
 /**
  * Wrap an async function in `unstable_cache` for production (Next request context).
@@ -323,13 +324,16 @@ async function getTrendSeriesImpl(input: TrendInput): Promise<TrendSeriesRow[]> 
     ? eq(transactions.accountId, input.accountId)
     : undefined;
 
-  const today = new Date();
-  const startMonth = new Date(
-    Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - window + 1, 1),
-  );
-  const endExclusive = new Date(
-    Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1),
-  );
+  // CR-03: anchor the rolling window on the Madrid month, not the UTC server
+  // month. `to_char(booking_date, 'YYYY-MM')` below produces user-local YYYY-MM
+  // (booking_date is a calendar DATE that callers fill with the user's local
+  // day). At the day-boundary on a UTC server the JS `today.getUTCMonth()`
+  // could disagree with the SQL bucket by a whole month, shifting the rightmost
+  // bar to the wrong month. Matches D-32/D-35 dashboard semantics and the
+  // currentMadridMonth() anchor used by app/(authenticated)/page.tsx.
+  const { year: nowY, month: nowM } = currentMadridMonth(); // 1-indexed
+  const startMonth = new Date(Date.UTC(nowY, nowM - 1 - (window - 1), 1));
+  const endExclusive = new Date(Date.UTC(nowY, nowM, 1));
 
   const aggRows = await db
     .select({
