@@ -147,16 +147,30 @@ function priorMonth(year: number, month: number): { year: number; month: number 
 }
 
 /**
- * Compute MoM % delta with 1-decimal precision. Returns null when prior is zero
- * AND current is nonzero (div-by-zero sentinel — UI shows "Sin datos del mes
- * anterior"). When both are zero, returns 0.0 (flat). Uses |prior| denominator
- * so net deltas with negative net values still produce intuitive direction.
+ * Compute MoM % delta with 1-decimal precision.
+ *
+ * Returns:
+ *   null  → no comparable baseline. Either:
+ *           - prior == 0 and current != 0 (div-by-zero — undefined growth from zero), OR
+ *           - prior == 0 and current == 0 (no comparable data: this component had no
+ *             activity in either month, so a "0,0 %" reading would falsely imply
+ *             "flat baseline" when there is no baseline at all). CR-02.
+ *   number → 1-decimal-rounded percentage delta. Negative when current < prior.
+ *
+ * Uses |prior| denominator so net deltas with negative net values still produce
+ * intuitive direction (e.g. net went from -100 to -50 → +50% improvement).
+ *
+ * CR-02 design note: per-component nulling (instead of the previous
+ * "(0n, 0n) → 0.0") removes the visual collision in MoMDelta.tsx where
+ * "Sin datos del mes anterior" and "0,0 %" both render as neutral grey
+ * with no arrow. After this change, "0,0 %" only appears when a component
+ * actually moved and rounded to ±0,0 (e.g. prior=10000, current=10004 →
+ * 0.04%, rounded to 0.0). MoMDelta still renders that as flat-grey, which
+ * is the intended "no material change" reading. Truly absent data shows
+ * "Sin datos del mes anterior" instead.
  */
 function pctDelta(current: bigint, prior: bigint): number | null {
-  if (prior === 0n) {
-    if (current === 0n) return 0.0;
-    return null;
-  }
+  if (prior === 0n) return null;
   const c = Number(current);
   const p = Number(prior);
   return Math.round(((c - p) / Math.abs(p)) * 1000) / 10;
@@ -235,12 +249,22 @@ async function getMonthlyKpisWithDeltaImpl(
   const priorMm = priorMonth(input.year, input.month);
   const prior = await getMonthlyKpisImpl({ ...input, ...priorMm });
 
-  // D-33: if prior month has zero rows ("Sin datos del mes anterior"), all deltas null.
+  // D-33: if prior month has zero non-transfer rows ("Sin datos del mes
+  // anterior"), all deltas null. Note: prior.txn_count is the COUNT(*) AFTER
+  // the `categories.kind != 'transfer'` filter is applied (see
+  // getMonthlyKpisImpl), so a transfer-only prior month already produces 0
+  // here — no separate "had any matching rows" query needed (CR-02 review
+  // concern (2) re-checked).
   const priorIsEmpty = prior.txn_count === 0;
   return {
     current,
     prior,
     delta_pct: {
+      // Per-component pctDelta now returns null when prior_component == 0
+      // (CR-02): both the "no baseline at all" and "no activity in this
+      // component" cases collapse to null, so MoMDelta.tsx renders the
+      // canonical "Sin datos del mes anterior" copy in both cases — never
+      // a misleading "0,0 %".
       income: priorIsEmpty ? null : pctDelta(current.income_cents, prior.income_cents),
       expense: priorIsEmpty
         ? null
