@@ -28,7 +28,7 @@
  */
 
 import { Suspense } from "react";
-import { eq, desc, isNull } from "drizzle-orm";
+import { and, eq, desc, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { categories, transactions } from "@/drizzle/schema";
 import { getTransactionsList } from "@/lib/aggregates";
@@ -114,6 +114,14 @@ function parseInputs(sp: SearchParams) {
  * Fetch the full row needed by QuickAddSheet's edit-mode prefill. UUID is
  * regex-validated upstream so a malformed `?editar=...` short-circuits to null
  * and the sheet stays closed (Sheet `open={!!editar}` controls visibility).
+ *
+ * WR-NEW-04: filter out soft-deleted rows so this fetch matches
+ * `editTransaction`'s WHERE-clause contract. Without this guard, a stale
+ * `?editar={id}` URL (bookmark, back button, link from another tab) opens the
+ * Sheet prefilled with the soft-deleted row's content; the user clicks
+ * "Guardar cambios" → editTransaction returns kind:"not_found" because *its*
+ * WHERE clause includes isNull(softDeletedAt). Aligning the read with the
+ * write closes that "open then 404" loop — the sheet stays closed instead.
  */
 async function fetchEditTarget(id: string) {
   if (!UUID_RE.test(id)) return null;
@@ -126,7 +134,7 @@ async function fetchEditTarget(id: string) {
       categoryId: transactions.categoryId,
     })
     .from(transactions)
-    .where(eq(transactions.id, id))
+    .where(and(eq(transactions.id, id), isNull(transactions.softDeletedAt)))
     .limit(1);
   const r = rows[0];
   if (!r) return null;
