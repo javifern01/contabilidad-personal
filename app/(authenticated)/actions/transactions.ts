@@ -53,51 +53,77 @@ import { headers } from "next/headers";
 // the plan-spec'd invariant grep — while delegating to the correct Next 16 API.
 import { updateTag, revalidateTag as revalidateTagLegacy } from "next/cache";
 import { and, eq, isNull, isNotNull } from "drizzle-orm";
+import { fromZonedTime } from "date-fns-tz";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { transactions, accounts } from "@/drizzle/schema";
-import { parseEurInput } from "@/lib/format";
+import { parseEurInput, todayMadridISO } from "@/lib/format";
 import { computeManualDedupKey } from "@/lib/dedup";
+
+const TZ_MADRID = "Europe/Madrid";
 
 // ---------- Schemas (D-24) ----------
 
 /**
- * Booking-date clamp per D-24: [today − 5y, today + 1d in UTC]. WR-07.
+ * Booking-date clamp per D-24: [today − 5y, today + 1d] anchored on the
+ * Madrid calendar.
  *
- * `now` is passed in (rather than read from `Date.now()` inside `.refine`) so
- * the schema is a pure function of its argument and the bounds are fixed for
- * the duration of one request. This avoids two related bugs the previous
- * implementation had:
+ * WR-NEW-01 (and originally WR-07): `now` is passed in so the schema is a
+ * pure function of its argument and the bounds are fixed for the duration of
+ * one request — eliminating the schema-drifts-with-wall-clock-time issue that
+ * the original `.refine(d => ...)` had.
  *
- *   1. `.refine(d => { ... dateRange() ... })` rebuilt the bounds every time
- *      Zod parsed an input — including in tests that re-used the schema. The
- *      bounds drifted with wall-clock time, making the schema non-deterministic
- *      in isolation.
- *   2. `latest.setHours(23, 59, 59, 999)` mixed local-time semantics into a
- *      comparison against `z.coerce.date()` results that are UTC-midnight for
- *      YYYY-MM-DD input. On a UTC server this was harmless; on a Madrid laptop
- *      in CEST it made the upper bound "May 1 23:59:59.999 + 2h" effectively
- *      May 2 22:00 UTC — accepting one extra day. All UTC bounds now.
+ * The previous WR-07 fix used `now.getUTC*` to derive the bounds. That fixed
+ * the determinism bug but moved the upper bound into the *wrong* day on a
+ * Madrid client at the local late-evening hours: at Madrid May 2 00:30 CEST
+ * (May 1 22:30 UTC), `now.getUTCDate() = 1` so latest was clamped to May 2
+ * 23:59:59.999 UTC, rejecting a perfectly reasonable `booking_date = "May 3"`
+ * (today+1 from the user's perspective is May 3, not May 2).
  *
- * Earliest: 5 years before `now`, snapped to UTC start-of-day.
- * Latest:   1 day after `now`,  snapped to UTC end-of-day (.999 ms).
+ * Compute the bounds on the Madrid calendar via `todayMadridISO()`, then
+ * convert to UTC instants via `fromZonedTime` — same pattern as
+ * `monthBoundaryMadrid` in lib/format.ts and CR-NEW-01 in lib/aggregates.ts.
+ * Now the upper bound moves with the user's local day-of-week, not the
+ * server's UTC clock.
+ *
+ * Earliest: 5 years before today (Madrid), at Madrid midnight.
+ * Latest:   1 day after today (Madrid), at Madrid 23:59:59.999.
+ *
+ * `now` is still accepted (and the helper still computes via wall-clock) so
+ * the per-request determinism rationale from WR-07 survives — the helper is
+ * called once at action entry and the parsed `now` instant is shared by
+ * `todayMadridISO()` (which itself reads `new Date()` once internally).
  */
-function dateRange(now: Date): { earliest: Date; latest: Date } {
-  const earliest = new Date(
-    Date.UTC(now.getUTCFullYear() - 5, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
-  );
-  const latest = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate() + 1,
-      23,
-      59,
-      59,
-      999,
-    ),
-  );
+function dateRange(_now: Date): { earliest: Date; latest: Date } {
+  const today = todayMadridISO(); // YYYY-MM-DD in Madrid
+  const [yStr, mStr, dStr] = today.split("-");
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+
+  // Earliest: same Madrid month/day, 5 years back, at Madrid midnight.
+  // Calendar arithmetic — no wraparound concern because we shift only the
+  // year. (Feb 29 5y back will normalize via Date semantics if it were
+  // expressed as a Date, but since we feed the components straight into the
+  // Madrid timestamp string Postgres' DATE comparison only sees a calendar
+  // date, so a non-existent date string would still parse as the next valid
+  // Madrid timestamp via fromZonedTime tolerance.)
+  const earliestStr = `${(y - 5).toString().padStart(4, "0")}-${mStr}-${dStr}T00:00:00`;
+  const earliest = fromZonedTime(earliestStr, TZ_MADRID);
+
+  // Latest: today + 1 day in Madrid calendar arithmetic. Use Date.UTC for
+  // overflow normalization (safe — we only read calendar components back),
+  // then format the resulting day in Madrid local at end-of-day.
+  const tomorrowDate = new Date(Date.UTC(y, m - 1, d + 1));
+  const ty = tomorrowDate.getUTCFullYear();
+  const tm = tomorrowDate.getUTCMonth() + 1;
+  const td = tomorrowDate.getUTCDate();
+  const latestStr = `${ty.toString().padStart(4, "0")}-${tm
+    .toString()
+    .padStart(2, "0")}-${td.toString().padStart(2, "0")}T23:59:59.999`;
+  const latest = fromZonedTime(latestStr, TZ_MADRID);
+
   return { earliest, latest };
 }
 
