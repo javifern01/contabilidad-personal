@@ -39,8 +39,12 @@ vi.mock("next/headers", () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
 
-// Stub next/cache because revalidateTag is only safe inside a Next request context.
+// Stub next/cache because the cache-invalidation primitives only work inside a
+// real Next request context. Action under test calls `updateTag` (Next 16 Server
+// Action idiom); we also stub `revalidateTag` so any future re-routing of the
+// helper still resolves cleanly.
 vi.mock("next/cache", () => ({
+  updateTag: vi.fn(),
   revalidateTag: vi.fn(),
 }));
 
