@@ -56,6 +56,7 @@ import {
   type EditTransactionResult,
 } from "@/app/(authenticated)/actions/transactions";
 import type { Category } from "@/drizzle/schema";
+import { todayMadridISO } from "@/lib/format";
 import { CategorySelect } from "./CategorySelect";
 
 export interface QuickAddSheetProps {
@@ -82,16 +83,19 @@ export interface QuickAddSheetProps {
 }
 
 /**
- * Build today's calendar date in YYYY-MM-DD form. Uses local components so the
- * <input type="date"> defaults to "today in the user's TZ" (which for the
- * single-owner Spain user is Europe/Madrid) without DST drift.
+ * Build today's calendar date in YYYY-MM-DD form, anchored on Europe/Madrid.
+ *
+ * WR-09: This Client Component hydrates against SSR markup. The previous
+ * implementation used `d.getFullYear()/getMonth()/getDate()` (browser-local
+ * on the client; UTC on the Vercel server) so the SSR-rendered defaultValue
+ * disagreed with the client-rendered defaultValue at the Madrid day-boundary,
+ * producing hydration warnings AND prefilling the wrong day for ~2 hours
+ * each summer day. `todayMadridISO()` from lib/format.ts produces identical
+ * output on both runtimes (Node + every modern browser ship Europe/Madrid TZ
+ * data), so SSR and CSR agree.
  */
 function todayISO(): string {
-  const d = new Date();
-  const yyyy = d.getFullYear().toString().padStart(4, "0");
-  const mm = (d.getMonth() + 1).toString().padStart(2, "0");
-  const dd = d.getDate().toString().padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  return todayMadridISO();
 }
 
 /**
