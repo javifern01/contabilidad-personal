@@ -98,6 +98,14 @@ export function Filters({ categories }: FiltersProps) {
     items: categories.filter((c) => c.kind === kind),
   }));
 
+  // WR-04: every filter input is a CONTROLLED component bound to the URL
+  // state via `value={... ?? ""}`. The previous `defaultValue` form was only
+  // consulted on first mount, so URL → input sync broke after:
+  //   - clicking "Limpiar filtros" (URL clears, inputs stay populated)
+  //   - back / forward navigation (URL changes, inputs frozen)
+  //   - any link/redirect that mutates the URL state externally.
+  // Controlled inputs re-render whenever nuqs reads the URL, keeping the UI
+  // consistent with the URL at all times.
   return (
     <div className="grid grid-cols-1 gap-3 border-b p-4 sm:grid-cols-3 lg:grid-cols-6">
       <div>
@@ -105,7 +113,7 @@ export function Filters({ categories }: FiltersProps) {
         <Input
           id="filter-q"
           placeholder="Descripción..."
-          defaultValue={q ?? ""}
+          value={q ?? ""}
           maxLength={200}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setFilter(setQ, e.target.value)}
         />
@@ -115,7 +123,7 @@ export function Filters({ categories }: FiltersProps) {
         <Input
           id="filter-desde"
           type="date"
-          defaultValue={desde ?? ""}
+          value={desde ?? ""}
           onChange={(e) => setFilter(setDesde, e.target.value)}
         />
       </div>
@@ -124,7 +132,7 @@ export function Filters({ categories }: FiltersProps) {
         <Input
           id="filter-hasta"
           type="date"
-          defaultValue={hasta ?? ""}
+          value={hasta ?? ""}
           onChange={(e) => setFilter(setHasta, e.target.value)}
         />
       </div>
@@ -133,7 +141,7 @@ export function Filters({ categories }: FiltersProps) {
         <Input
           id="filter-min"
           inputMode="decimal"
-          defaultValue={min ?? ""}
+          value={min ?? ""}
           placeholder="0,00"
           onChange={(e) => setFilter(setMin, e.target.value)}
         />
@@ -143,7 +151,7 @@ export function Filters({ categories }: FiltersProps) {
         <Input
           id="filter-max"
           inputMode="decimal"
-          defaultValue={max ?? ""}
+          value={max ?? ""}
           placeholder="9999,99"
           onChange={(e) => setFilter(setMax, e.target.value)}
         />
