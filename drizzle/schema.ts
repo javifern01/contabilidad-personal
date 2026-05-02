@@ -24,7 +24,15 @@ import {
   boolean,
   timestamp,
   bigserial,
+  bigint,
+  integer,
+  uuid,
+  date,
+  numeric,
+  real,
   index,
+  uniqueIndex,
+  check,
 } from "drizzle-orm/pg-core";
 
 // ---------- Better Auth tables (D-08, D-10) ----------
@@ -121,9 +129,110 @@ export const authAuditLog = pgTable(
   ],
 );
 
+// ---------- Phase 2 tables (D-16, D-18, D-20) — accounts / categories / transactions ----------
+// MONEY-AS-BIGINT (FND-02): amount_cents and amount_eur_cents are bigint (positive cents per D-21).
+// Sign is derived from category.kind at aggregation time (D-26). CHECK constraint enforces positivity.
+// Partial indexes filter `WHERE soft_deleted_at IS NULL` so list/dashboard reads skip trash rows.
+//
+// SELF-FK on transactions.transfer_pair_id (D-20): the column-level reference is omitted here
+// because Drizzle's self-FK requires deferred reference / relations() boilerplate. The FK
+// constraint is added via raw SQL in the generated migration (mirrors Phase 1's INET hand-patch
+// pattern). Phase 3 fills transfer_pair_id when auto-detect ships.
+
+export const accounts = pgTable("accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  displayName: text("display_name").notNull(),
+  // TODO: Phase 4 may tighten to varchar(3) / CHECK (length=3); D-18 specifies char(3).
+  currency: text("currency").notNull().default("EUR"),
+  type: text("type"), // 'cash' | 'checking' | 'savings' | 'credit_card' (nullable; Phase 4 may tighten)
+  isArchived: boolean("is_archived").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+    .notNull()
+    .defaultNow(),
+});
+
+export const categories = pgTable(
+  "categories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(), // 'expense' | 'income' | 'transfer'
+    sortOrder: integer("sort_order").notNull().default(100),
+    isSystem: boolean("is_system").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check("categories_kind_check", sql`${t.kind} IN ('expense','income','transfer')`),
+  ],
+);
+
+export const transactions = pgTable(
+  "transactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "restrict" }),
+    externalId: text("external_id"),
+    dedupKey: text("dedup_key").notNull(),
+    bookingDate: date("booking_date", { mode: "date" }).notNull(),
+    valueDate: date("value_date", { mode: "date" }),
+    amountCents: bigint("amount_cents", { mode: "bigint" }).notNull(),
+    amountEurCents: bigint("amount_eur_cents", { mode: "bigint" }).notNull(),
+    originalCurrency: text("original_currency").notNull().default("EUR"),
+    fxRate: numeric("fx_rate", { precision: 18, scale: 8 }),
+    descriptionRaw: text("description_raw").notNull(),
+    merchantNormalized: text("merchant_normalized"),
+    counterpartyName: text("counterparty_name"),
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "restrict" }),
+    categorySource: text("category_source").notNull().default("manual"),
+    categoryConfidence: real("category_confidence"),
+    status: text("status").notNull().default("posted"),
+    // FK on transfer_pair_id is added via raw SQL in the migration (see Phase 2 migration tail).
+    transferPairId: uuid("transfer_pair_id"),
+    source: text("source").notNull().default("manual"),
+    notes: text("notes"),
+    importedAt: timestamp("imported_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+    softDeletedAt: timestamp("soft_deleted_at", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [
+    uniqueIndex("transactions_account_dedup_unique_idx").on(t.accountId, t.dedupKey),
+    index("transactions_booking_date_partial_idx")
+      .on(t.bookingDate.desc())
+      .where(sql`${t.softDeletedAt} IS NULL`),
+    index("transactions_account_booking_partial_idx")
+      .on(t.accountId, t.bookingDate.desc())
+      .where(sql`${t.softDeletedAt} IS NULL`),
+    index("transactions_category_booking_partial_idx")
+      .on(t.categoryId, t.bookingDate.desc())
+      .where(sql`${t.softDeletedAt} IS NULL`),
+    check("transactions_amount_cents_positive_check", sql`${t.amountCents} > 0`),
+    check(
+      "transactions_amount_eur_cents_positive_check",
+      sql`${t.amountEurCents} > 0`,
+    ),
+  ],
+);
+
 // ---------- Type exports for downstream phases ----------
 export type User = typeof user.$inferSelect;
 export type NewUser = typeof user.$inferInsert;
 export type Session = typeof session.$inferSelect;
 export type AuthAuditLogRow = typeof authAuditLog.$inferSelect;
 export type NewAuthAuditLogRow = typeof authAuditLog.$inferInsert;
+
+export type Account = typeof accounts.$inferSelect;
+export type NewAccount = typeof accounts.$inferInsert;
+export type Category = typeof categories.$inferSelect;
+export type NewCategory = typeof categories.$inferInsert;
+export type Transaction = typeof transactions.$inferSelect;
+export type NewTransaction = typeof transactions.$inferInsert;
