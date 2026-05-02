@@ -39,35 +39,55 @@ import { transactions, categories } from "@/drizzle/schema";
 import { currentMadridMonth } from "@/lib/format";
 
 /**
+ * Detect whether we are running inside a Next.js request context (Server
+ * Component, Server Action, Route Handler, Middleware). In that environment
+ * `unstable_cache` works; everywhere else (Vitest, ad-hoc scripts via tsx,
+ * the migration runner) the per-request incremental-cache singleton is not
+ * initialised and `unstable_cache(...)` throws a Next-internal "incrementalCache
+ * missing" invariant.
+ *
+ * WR-01: the previous implementation caught that error by string-matching
+ * `err.message.includes("incrementalCache missing")`. Next has changed that
+ * exact wording at least twice across minor versions; if it changes again, the
+ * production cache silently bypasses (every dashboard request hits the DB
+ * straight, no warning) OR a real cache failure gets swallowed in production
+ * — either way undetectable until the SLA breaks. Detect the runtime up front
+ * instead, by flag we control.
+ *
+ * `process.env.NEXT_RUNTIME` is set to "nodejs" or "edge" by Next at boot
+ * inside its server runtime. Vitest does not set it. This is the documented,
+ * stable signal Next exposes for runtime detection.
+ */
+const IS_NEXT_RUNTIME =
+  process.env.NEXT_RUNTIME === "nodejs" || process.env.NEXT_RUNTIME === "edge";
+
+/**
  * Wrap an async function in `unstable_cache` for production (Next request context).
  *
- * In Vitest / non-Next contexts, `unstable_cache` throws "Invariant: incrementalCache
- * missing" because Next's per-request cache singleton is not initialised. We defensively
- * try the cached path first; on the missing-incremental-cache error we fall through
- * to the raw implementation. This preserves D-39 caching semantics in production while
- * keeping the integration tests in lib/aggregates.test.ts runnable against live Neon.
+ * Behaviour:
+ *   - Inside a Next runtime → delegate to `unstable_cache`. Errors propagate
+ *     as-is so a real cache failure surfaces in monitoring instead of being
+ *     silently swallowed (the prior brittle fallback hid these).
+ *   - Outside a Next runtime (Vitest / scripts) → call the impl directly. No
+ *     cache, no surprises. The integration tests in lib/aggregates.test.ts
+ *     keep working against live Neon without needing to mock next/cache.
  *
- * The cache tags + keyParts are still passed in source so the grep-based acceptance
- * criteria pass and `revalidateTag('transactions' | 'dashboard')` (Plan 02-03 writes)
- * invalidates correctly at runtime.
+ * The cache tags + keyParts are still passed in source so the grep-based
+ * acceptance criteria pass and `revalidateTag('transactions' | 'dashboard')`
+ * (Plan 02-03 writes) invalidates correctly at runtime.
  */
 function withCache<TArgs extends readonly unknown[], TResult>(
   impl: (...args: TArgs) => Promise<TResult>,
   keyParts: string[],
   options: { tags: string[]; revalidate: number },
 ): (...args: TArgs) => Promise<TResult> {
-  return async (...args: TArgs): Promise<TResult> => {
-    try {
-      return await unstable_cache(() => impl(...args), keyParts, options)();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("incrementalCache missing")) {
-        // Test / non-Next runtime — bypass cache.
-        return impl(...args);
-      }
-      throw err;
-    }
-  };
+  if (!IS_NEXT_RUNTIME) {
+    // Vitest / standalone — bypass cache. No string-matching, no swallowed
+    // errors, no surprises if Next renames its internal invariant message.
+    return impl;
+  }
+  return async (...args: TArgs): Promise<TResult> =>
+    unstable_cache(() => impl(...args), keyParts, options)();
 }
 
 // ---------- Module constants ----------
