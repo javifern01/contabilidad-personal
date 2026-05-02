@@ -63,17 +63,41 @@ import { computeManualDedupKey } from "@/lib/dedup";
 // ---------- Schemas (D-24) ----------
 
 /**
- * Booking-date clamp per D-24: [today − 5y, today + 1d].
- * The +1d allows the user to enter a transaction "for tomorrow" once.
+ * Booking-date clamp per D-24: [today − 5y, today + 1d in UTC]. WR-07.
+ *
+ * `now` is passed in (rather than read from `Date.now()` inside `.refine`) so
+ * the schema is a pure function of its argument and the bounds are fixed for
+ * the duration of one request. This avoids two related bugs the previous
+ * implementation had:
+ *
+ *   1. `.refine(d => { ... dateRange() ... })` rebuilt the bounds every time
+ *      Zod parsed an input — including in tests that re-used the schema. The
+ *      bounds drifted with wall-clock time, making the schema non-deterministic
+ *      in isolation.
+ *   2. `latest.setHours(23, 59, 59, 999)` mixed local-time semantics into a
+ *      comparison against `z.coerce.date()` results that are UTC-midnight for
+ *      YYYY-MM-DD input. On a UTC server this was harmless; on a Madrid laptop
+ *      in CEST it made the upper bound "May 1 23:59:59.999 + 2h" effectively
+ *      May 2 22:00 UTC — accepting one extra day. All UTC bounds now.
+ *
+ * Earliest: 5 years before `now`, snapped to UTC start-of-day.
+ * Latest:   1 day after `now`,  snapped to UTC end-of-day (.999 ms).
  */
-function dateRange(): { earliest: Date; latest: Date } {
-  const earliest = new Date();
-  earliest.setFullYear(earliest.getFullYear() - 5);
-  const latest = new Date();
-  latest.setDate(latest.getDate() + 1);
-  // Push latest to end-of-day so a UTC-midnight booking_date for "tomorrow"
-  // (which the date input emits as YYYY-MM-DDT00:00:00Z) is accepted.
-  latest.setHours(23, 59, 59, 999);
+function dateRange(now: Date): { earliest: Date; latest: Date } {
+  const earliest = new Date(
+    Date.UTC(now.getUTCFullYear() - 5, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
+  );
+  const latest = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + 1,
+      23,
+      59,
+      59,
+      999,
+    ),
+  );
   return { earliest, latest };
 }
 
@@ -85,52 +109,42 @@ function dateRange(): { earliest: Date; latest: Date } {
  * the same reason — `editTransaction` deliberately does not let the user move
  * a row between accounts (no UI surface for it, and the dedup_key recomputation
  * below uses the existing row's accountId, not a form value).
+ *
+ * Built per-request via `buildTransactionSchema(now)` so date bounds are
+ * deterministic for each parse (WR-07).
  */
-const baseTransactionFields = {
-  amount: z
-    .string()
-    .min(1, { message: "El importe es obligatorio." })
-    .max(20)
-    .transform((s, ctx) => {
-      try {
-        const cents = parseEurInput(s);
-        if (cents <= 0n) {
-          ctx.addIssue({ code: "custom", message: "El importe debe ser positivo." });
+function buildTransactionSchema(now: Date) {
+  const { earliest, latest } = dateRange(now);
+  return z.object({
+    amount: z
+      .string()
+      .min(1, { message: "El importe es obligatorio." })
+      .max(20)
+      .transform((s, ctx) => {
+        try {
+          const cents = parseEurInput(s);
+          if (cents <= 0n) {
+            ctx.addIssue({ code: "custom", message: "El importe debe ser positivo." });
+            return z.NEVER;
+          }
+          return cents;
+        } catch {
+          ctx.addIssue({ code: "custom", message: "Importe no válido." });
           return z.NEVER;
         }
-        return cents;
-      } catch {
-        ctx.addIssue({ code: "custom", message: "Importe no válido." });
-        return z.NEVER;
-      }
-    }),
-  booking_date: z.coerce.date().refine(
-    (d) => {
-      const { earliest, latest } = dateRange();
-      return d >= earliest && d <= latest;
-    },
-    { message: "Fecha fuera de rango." },
-  ),
-  description: z
-    .string()
-    .min(1, { message: "La descripción es obligatoria." })
-    .max(200, { message: "La descripción no puede superar los 200 caracteres." }),
-  category_id: z.string().uuid({ message: "Categoría no válida." }),
-};
-
-const addTransactionSchema = z.object(baseTransactionFields);
-
-/**
- * Edit schema. Identical to add at Phase 2: same four user-controlled fields.
- * Kept as a separate schema (rather than re-using addTransactionSchema)
- * because:
- *   - editTransaction must NOT accept account_id from form data (CR-01) — the
- *     existing row's accountId is loaded server-side and re-used in the dedup
- *     recomputation, so the API surface should not lie about what is honoured.
- *   - Phase 4 will likely diverge (e.g. allow editing booking_date but not
- *     account_id once PSD2-synced rows exist).
- */
-const editTransactionSchema = z.object(baseTransactionFields);
+      }),
+    booking_date: z
+      .coerce.date()
+      .refine((d) => d >= earliest && d <= latest, {
+        message: "Fecha fuera de rango.",
+      }),
+    description: z
+      .string()
+      .min(1, { message: "La descripción es obligatoria." })
+      .max(200, { message: "La descripción no puede superar los 200 caracteres." }),
+    category_id: z.string().uuid({ message: "Categoría no válida." }),
+  });
+}
 
 const idSchema = z.string().uuid({ message: "ID no válido." });
 
@@ -249,7 +263,11 @@ export async function addTransaction(formData: FormData): Promise<AddTransaction
     return { ok: false, kind: "server_error" };
   }
 
-  const parsed = addTransactionSchema.safeParse({
+  // WR-07: schema bounds (booking_date clamp) are pinned to a single `now`
+  // captured at action entry, so all date comparisons inside one request use
+  // the same instant.
+  const schema = buildTransactionSchema(new Date());
+  const parsed = schema.safeParse({
     amount: formData.get("amount"),
     booking_date: formData.get("booking_date"),
     description: formData.get("description"),
@@ -351,7 +369,9 @@ export async function editTransaction(
     };
   }
 
-  const parsed = editTransactionSchema.safeParse({
+  // WR-07: per-request schema; same rationale as addTransaction above.
+  const schema = buildTransactionSchema(new Date());
+  const parsed = schema.safeParse({
     amount: formData.get("amount"),
     booking_date: formData.get("booking_date"),
     description: formData.get("description"),
