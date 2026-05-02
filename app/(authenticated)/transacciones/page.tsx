@@ -65,10 +65,15 @@ function parseInputs(sp: SearchParams) {
   // T-02-21: amount filters parsed via parseEurInput (handles Spanish commas);
   // any parse failure (NaN, garbage) falls back to undefined so the filter is
   // simply ignored — never throws into the request boundary.
-  const safeBigint = (v: unknown): bigint | undefined => {
+  //
+  // WR-CONT-01: returns cents-as-string (not bigint) so the result is
+  // JSON-serializable and participates in `getTransactionsList`'s
+  // `unstable_cache` auto-arg-hash (which throws on raw bigints). The impl
+  // parses the string back to bigint just before issuing the SQL gte/lte.
+  const safeCentsString = (v: unknown): string | undefined => {
     if (typeof v !== "string" || v.length === 0) return undefined;
     try {
-      return parseEurInput(v);
+      return parseEurInput(v).toString();
     } catch {
       return undefined;
     }
@@ -101,8 +106,8 @@ function parseInputs(sp: SearchParams) {
 
   return {
     q,
-    min: safeBigint(sp.min),
-    max: safeBigint(sp.max),
+    min: safeCentsString(sp.min),
+    max: safeCentsString(sp.max),
     desde: safeDate(sp.desde),
     hasta: safeDate(sp.hasta),
     cat: safeUuidArr(sp.cat),

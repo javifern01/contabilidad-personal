@@ -345,9 +345,11 @@ describe.skipIf(!RUN)("getTransactionsList (D-37, D-28)", () => {
     await insertTxn({ account, category: exp, bookingDate: "2026-04-01", amountCents: 100n });
     await insertTxn({ account, category: exp, bookingDate: "2026-04-02", amountCents: 200n });
     await insertTxn({ account, category: exp, bookingDate: "2026-04-03", amountCents: 300n });
+    // WR-CONT-01: min/max accept cents-as-string at the API boundary so the
+    // input shape is JSON-serializable for unstable_cache hashing.
     const result = await getTransactionsList({
-      min: 150n,
-      max: 250n,
+      min: "150",
+      max: "250",
       accountId: account.id,
     });
     expect(result.rows.length).toBe(1);

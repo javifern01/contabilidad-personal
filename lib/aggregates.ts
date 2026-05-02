@@ -502,10 +502,25 @@ export const getTrendSeries = (input: TrendInput): Promise<TrendSeriesRow[]> =>
 
 // ---------- getTransactionsList ----------
 
+/**
+ * WR-CONT-01: `min`/`max` are typed as `string` (cents-as-string) at the API
+ * boundary, NOT `bigint`. Reason: Next 16's `unstable_cache` auto-hashes
+ * function arguments via `JSON.stringify`, which throws on raw bigints. By
+ * accepting cents-as-string at the boundary and parsing to bigint inside the
+ * impl, the input shape is JSON-safe end-to-end and the cached wrapper can
+ * hoist to module scope (matching the pattern of the four other exports).
+ *
+ * Symmetric with how `cat?: string[]` already pre-serializes UUIDs at the
+ * boundary. Callers (currently only `app/(authenticated)/transacciones/page.tsx`)
+ * supply `parseEurInput(rawString).toString()` instead of the raw bigint.
+ *
+ * `desde`/`hasta` are typed as `Date` for ergonomics; `JSON.stringify` handles
+ * Date natively (ISO string), so they participate in the cache key cleanly.
+ */
 export interface TransactionsListInput {
   q?: string; // ILIKE on description_raw
-  min?: bigint; // amountEurCents >=
-  max?: bigint; // amountEurCents <=
+  min?: string; // amountEurCents >= (cents-as-string; parsed to bigint internally)
+  max?: string; // amountEurCents <= (cents-as-string; parsed to bigint internally)
   desde?: Date; // bookingDate >=
   hasta?: Date; // bookingDate <=
   cat?: string[]; // category ids (multi-select)
@@ -526,11 +541,24 @@ async function getTransactionsListImpl(
     // the entire `%${q}%` literal is sent as a single bind parameter, not interpolated.
     conditions.push(ilike(transactions.descriptionRaw, `%${input.q}%`));
   }
+  // WR-CONT-01: parse cents-as-string → bigint at the impl boundary. Defensive
+  // try/catch — a malformed string (which the page.tsx caller already filters
+  // upstream via parseEurInput) silently drops the filter rather than throwing,
+  // matching the lenient "garbage in → no filter" contract the route already
+  // uses for unparseable inputs.
   if (input.min !== undefined) {
-    conditions.push(gte(transactions.amountEurCents, input.min));
+    try {
+      conditions.push(gte(transactions.amountEurCents, BigInt(input.min)));
+    } catch {
+      /* invalid bigint string — drop the filter */
+    }
   }
   if (input.max !== undefined) {
-    conditions.push(lte(transactions.amountEurCents, input.max));
+    try {
+      conditions.push(lte(transactions.amountEurCents, BigInt(input.max)));
+    } catch {
+      /* invalid bigint string — drop the filter */
+    }
   }
   if (input.desde) conditions.push(gte(transactions.bookingDate, input.desde));
   if (input.hasta) conditions.push(lte(transactions.bookingDate, input.hasta));
@@ -586,43 +614,27 @@ async function getTransactionsListImpl(
 }
 
 /**
- * Cache key serializer: bigint values from `min`/`max` filters are stringified
- * before JSON.stringify (which throws on raw bigints). Other input fields
- * serialize natively.
- */
-function listInputCacheKey(input: TransactionsListInput): string {
-  return JSON.stringify(input, (_key, value) =>
-    typeof value === "bigint" ? value.toString() : value,
-  );
-}
-
-/**
- * WR-NEW-05 NOTE: this export does NOT hoist the unstable_cache wrapper to
- * module scope (unlike _cachedGetMonthlyKpis et al). Reason: the typed input
- * carries bigint `min`/`max` filters, and Next 16's unstable_cache auto-hashes
- * the function arguments via JSON.stringify, which throws on raw bigints. The
- * existing pattern serializes bigints to strings via `listInputCacheKey()` and
- * embeds the result as a `keyParts` entry — but that means keyParts varies
- * per call, so a hoisted wrapper would not be reusable across distinct inputs.
+ * WR-CONT-01 (closes WR-NEW-05 exemption): the cache wrapper is now hoisted to
+ * module scope, matching the pattern of the four other exports
+ * (`_cachedGetMonthlyKpis` et al). This was previously exempted because
+ * `TransactionsListInput.min`/`max` were typed as `bigint`, and Next 16's
+ * `unstable_cache` auto-arg-hash via `JSON.stringify` throws on raw bigints.
  *
- * The cost of the per-call wrapping (one `unstable_cache(...)` allocation per
- * list query) is bounded — list queries fire on page renders, not in tight
- * loops — and avoiding it would require either (a) restructuring the call
- * surface to take a pre-serialized key (intrusive across plan-04 callers) or
- * (b) a per-key Map of pending typed inputs (raceable under concurrency, see
- * earlier WIP commit). The other four hoisted exports give the bulk of the
- * WR-NEW-05 benefit; the list query keeps the inline pattern with this
- * documenting comment.
+ * The fix: `min`/`max` are now `string` (cents-as-string) at the API boundary,
+ * parsed to `bigint` inside the impl. The whole input shape is JSON-safe, so
+ * Next 16 hashes it natively. Other fields (Date for `desde`/`hasta`, string[]
+ * for `cat`, etc.) already serialize cleanly.
+ *
+ * Tag rationale: list uses both 'transactions' and 'dashboard' tags so any
+ * future dashboard list snippets (Phase 6 may surface recent rows on /resumen)
+ * stay in sync. Shorter revalidate window than dashboard widgets; Server
+ * Actions revalidate synchronously on every write so cache is rarely stale.
  */
+const _cachedGetTransactionsList = withCache(
+  getTransactionsListImpl,
+  ["transactions-list"],
+  { tags: ["transactions", "dashboard"], revalidate: 60 },
+);
 export const getTransactionsList = (
   input: TransactionsListInput,
-): Promise<TransactionListPage> =>
-  withCache(
-    getTransactionsListImpl,
-    ["transactions-list", listInputCacheKey(input)],
-    // List uses both 'transactions' and 'dashboard' tags so dashboard list snippets
-    // (Phase 6 may surface recent rows on /resumen) stay in sync. Shorter revalidate
-    // window than dashboard widgets; Server Actions also revalidate synchronously
-    // on every write so cache is rarely stale to the user.
-    { tags: ["transactions", "dashboard"], revalidate: 60 },
-  )(input);
+): Promise<TransactionListPage> => _cachedGetTransactionsList(input);
