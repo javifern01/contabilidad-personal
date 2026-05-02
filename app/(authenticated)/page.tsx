@@ -55,6 +55,15 @@ function currentMadridMonth(): MonthSelection {
 /**
  * T-02-26: regex validate the URL `mes` value, clamp the year to a sane range,
  * and silently fall back to the current Madrid month on invalid input.
+ *
+ * WR-NEW-02: anchor `thisYear` on the Madrid calendar via `currentMadridMonthLib`
+ * (instead of `new Date().getFullYear()`, which on the Vercel UTC server
+ * returns the UTC year). At the Dec 31 → Jan 1 boundary in Madrid (CET = UTC+1)
+ * a Madrid user at 00:30 Jan 1 sees year+1 while the UTC server sees year, and
+ * the URL-clamp would inconsistently reject months that are perfectly valid
+ * from the Madrid user's perspective. Using the Madrid year keeps `parseMes`
+ * consistent with the rest of this file (`anchor`, `formatMonthEs(year, month)`)
+ * and with the WR-08/WR-09 SSR-stability rationale.
  */
 function parseMes(mes: string | undefined): MonthSelection {
   if (!mes || !/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) {
@@ -63,7 +72,7 @@ function parseMes(mes: string | undefined): MonthSelection {
   const [yStr, mStr] = mes.split("-");
   const year = Number(yStr);
   const month = Number(mStr);
-  const thisYear = new Date().getFullYear();
+  const thisYear = currentMadridMonthLib().year;
   if (year < thisYear - 25 || year > thisYear + 1) {
     return currentMadridMonth();
   }
